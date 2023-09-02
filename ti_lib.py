@@ -7,6 +7,7 @@ import numpy as np
 import simnibs
 import torch
 from simnibs import run_simnibs, sim_struct
+from ti_utils import find_msh
 
 
 def post_process_tDCS_sim(output_dir: Path, size: int = 1):
@@ -111,7 +112,7 @@ def run_tDCS_sim(subject_dir: Path,
                  electrode_shape: str = 'ellipse',
                  electrode_thickness=5,
                  post_process_size: int = 1,
-                 ):
+                 ) -> Tuple[Path, int]:
     """_summary_
 
     Args:
@@ -155,11 +156,15 @@ def run_tDCS_sim(subject_dir: Path,
                         )
 
     t0 = time.time()
-    run_simnibs(s, cpus=8)
+    # run_simnibs(s, cpus=8)
+    run_simnibs(s, cpus=1)
     dt = time.time() - t0
     print('Elapsed time: %f s' % dt)
 
     post_process_tDCS_sim(output_root, size=post_process_size)
+    n_vertices = simnibs.read_msh(
+        find_msh(output_root)).elements_baricenters()[:].shape[0]
+    return output_root, n_vertices
 
 
 def analyze_tDCS_sim(subject_dir: Path, output_dir: Path):
