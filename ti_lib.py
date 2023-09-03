@@ -1,39 +1,50 @@
 import shutil
 import time
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Tuple, Union, Dict
 
 import numpy as np
 import simnibs
 import torch
-from simnibs import run_simnibs, sim_struct
+from simnibs import sim_struct
 from ti_utils import find_msh
 
 
-def post_process_tDCS_sim(output_dir: Path, size: int = 1):
+def post_process_tDCS_sim(output_dir: Path,
+                          size: int = 1,
+                          reduce: bool = False,
+                          just_gray_matter: bool = False) -> Path:
     """ Analyze the tDCS simulation by calculating the mean electric field
     in the M1 ROI
     """
     msh_f = output_dir / 'ernie_TDCS_1_scalar.msh'
     head_mesh = simnibs.read_msh(msh_f)
+    if just_gray_matter:
+        head_mesh = head_mesh.crop_mesh(2)
     vecE = torch.from_numpy(head_mesh.field['E'][:])
     magnE = torch.from_numpy(head_mesh.field['magnE'][:])
     elm_centers = torch.from_numpy(
         head_mesh.elements_baricenters()[:])
+    if not reduce:
+        pass
+    else:
+        elm_centers_int = elm_centers.int() // size
 
-    elm_centers_int = elm_centers.int() // size
+        _, indices = np.unique(elm_centers.numpy(), return_index=True, axis=0)
+        indices_tensor = torch.from_numpy(indices)
 
-    _, indices = np.unique(elm_centers.numpy(), return_index=True, axis=0)
-    indices_tensor = torch.from_numpy(indices)
+        elm_centers_int = elm_centers_int[indices_tensor]
+        vecE = vecE[indices_tensor]
+        magnE = magnE[indices_tensor]
 
-    elm_centers_int = elm_centers_int[indices_tensor]
-    vecE = vecE[indices_tensor]
-    magnE = magnE[indices_tensor]
+        elm_centers = elm_centers_int,
+    ouput_f = output_dir / f'vecE-size-{size}.pt'
     torch.save({
-        'elm_centers_int': elm_centers_int,
+        'elm_centers': elm_centers,
         'vecE': vecE,
         'magnE': magnE,
-    }, output_dir / f'vecE-size-{size}.pt')
+    }, ouput_f)
+    return ouput_f
 
 
 def add_tdcs_electrodes(s: sim_struct.SESSION,
@@ -110,9 +121,13 @@ def run_tDCS_sim(subject_dir: Path,
                  anode_centre: Union[str, Tuple[float, float, float]],
                  current: float,
                  electrode_shape: str = 'ellipse',
+                 electrode_dimensions: Tuple[float, float] = (50, 50),
                  electrode_thickness=5,
                  post_process_size: int = 1,
-                 ) -> Tuple[Path, int]:
+                 cpus: int = 1,
+                 reduce: bool = False,
+                 just_gray_matter: bool = False,
+                 ) -> Dict[str, Union[str, int]]:
     """_summary_
 
     Args:
@@ -129,22 +144,31 @@ def run_tDCS_sim(subject_dir: Path,
 
     # Single-Pair tDCS simulation
 
-    current = 1e-3
     # cathode, anode
     centres = [cathode_centre, anode_centre]
 
     # pos_ydirs = ['Cz', 'Cz']
-    electrode_dimensions = [50, 50]
 
     out_dname = f'{centres[0]}-{centres[1]}-c-{current}'
     output_root = output_root / out_dname
 
     if output_root.is_dir():
-        shutil.rmtree(output_root)
+        size = 1
+        ouput_f = output_root / f'vecE-size-{size}.pt'
+        if ouput_f.is_file():
+            return {
+                'output_root': str(output_root.resolve()),
+                'n_vertices': torch.load(ouput_f)['vecE'].shape[0],
+                'tensor_E': str(ouput_f.resolve()),
+            }
+        else:
+            shutil.rmtree(output_root)
 
     # Initalize a session
     s = sim_struct.SESSION()
+    s.open_in_gmsh = False
     s.subpath = str(subject_dir)
+
     # Output folder
     s.pathfem = str(output_root)
     add_tdcs_electrodes(s, current,
@@ -156,15 +180,21 @@ def run_tDCS_sim(subject_dir: Path,
                         )
 
     t0 = time.time()
-    # run_simnibs(s, cpus=8)
-    run_simnibs(s, cpus=1)
+    s.run(cpus=cpus, save_mat=False)
     dt = time.time() - t0
     print('Elapsed time: %f s' % dt)
 
-    post_process_tDCS_sim(output_root, size=post_process_size)
+    tensor_E = post_process_tDCS_sim(
+        output_root, size=post_process_size, reduce=reduce,
+        just_gray_matter=just_gray_matter,
+    )
     n_vertices = simnibs.read_msh(
         find_msh(output_root)).elements_baricenters()[:].shape[0]
-    return output_root, n_vertices
+    return {
+        'output_root': str(output_root.resolve()),
+        'n_vertices': n_vertices,
+        'tensor_E': str(tensor_E.resolve()),
+    }
 
 
 def analyze_tDCS_sim(subject_dir: Path, output_dir: Path):

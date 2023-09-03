@@ -165,3 +165,4 @@ distances.png
 models
 
 run_ti_dl.py
+wandb

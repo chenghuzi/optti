@@ -158,7 +158,7 @@ def main():
 
     eeg_loc_df = pd.read_csv(
         'data/m2m_ernie/eeg_positions/EEG10-10_UI_Jurak_2007.csv', header=None)
-    locations = eeg_loc_df[4].values[:4]
+    locations = eeg_loc_df[4].values[:3]
 
     # current = 1mA
     current = 0.001
@@ -175,8 +175,14 @@ def main():
     def run_sim_wrapper(args):
         cathode_centre = args[2]
         anode_centre = args[3]
-        res_dir, n_vertices = run_tDCS_sim(*args)
-        return cathode_centre, anode_centre, str(res_dir.resolve()), n_vertices
+        res_info = run_tDCS_sim(*args)
+
+        return {
+            'cathode': cathode_centre,
+            'anode': anode_centre,
+            'res_info': res_info,
+        }
+
     t0 = time.time()
     res_all = mp.Pool(cores).map(run_sim_wrapper, all_args)
     dt = time.time() - t0
@@ -195,7 +201,7 @@ def main():
     #     tdcs_summary['results'].append([
     #         cathode_centre,
     #         anode_centre,
-    #         str(res_dir),
+    #         str(res_dir)d,
     #     ])
     #     json.dump(tdcs_summary, open(summary_f, 'w'), indent=2)
 

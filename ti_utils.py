@@ -1,12 +1,12 @@
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Dict, List
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
 
-def find_msh(dir:Path)->Path:
+def find_msh(dir: Path) -> Path:
     mshf = None
     for f in dir.glob("*.msh"):
         print(f'Found msh file: {f}')
@@ -18,21 +18,22 @@ def find_msh(dir:Path)->Path:
     return mshf
 
 
-def vector_cos_angles(a:np.ndarray, b:np.ndarray)->np.ndarray:
+def vector_cos_angles(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     dot_product = np.einsum('ij,ij->i', a, b)
     norms_a = np.linalg.norm(a, axis=1)
     norms_b = np.linalg.norm(b, axis=1)
     cos_angles = dot_product / (norms_a * norms_b)
     return cos_angles
 
+
 def align_mesh_idx(
-    elm_centers_base:torch.Tensor,
-    elm_centers2:torch.Tensor,
-    device:str,
-    dist_threshold:float = 1.0,
-    block_size:int = 400,
-    residual_block_size:int = 20,
-    )->Tuple[torch.Tensor, torch.Tensor]:
+    elm_centers_base: torch.Tensor,
+    elm_centers2: torch.Tensor,
+    device: str,
+    dist_threshold: float = 1.0,
+    block_size: int = 400,
+    residual_block_size: int = 20,
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Now since the dimensionality of the meshes are different, we need to
     use one of them as a reference and find the closest element in the other
@@ -53,36 +54,36 @@ def align_mesh_idx(
 
     n_elms = elm_centers_base.shape[0]
 
-
     new_indices_2 = torch.zeros(n_elms, dtype=torch.int64).to(device) - 1
     distances = (torch.zeros(n_elms, dtype=torch.int64).to(device) - 1).float()
 
-    for idx in tqdm(range(n_elms // block_size +1)):
+    for idx in tqdm(range(n_elms // block_size + 1)):
         # TODO: we can add some repeated elements in the corner
-        s2_left = idx* block_size
-        s2_right = (idx+1)* block_size
+        s2_left = idx * block_size
+        s2_right = (idx + 1) * block_size
         if idx > 0:
             s2_left = max(0, int(s2_left - block_size * 9))
         # s2_right = min(n_elms, int(s2_right + block_size * 9))
         s2_right = int(s2_right + block_size * 9)
 
         block_dist_matrix = torch.cdist(
-            elm_centers_base[idx* block_size:(idx+1)* block_size],
+            elm_centers_base[idx * block_size:(idx + 1) * block_size],
             elm_centers2[s2_left:s2_right])
 
         bdmm = block_dist_matrix.min(dim=1)
 
-        if  bdmm.values.max() > dist_threshold:
+        if bdmm.values.max() > dist_threshold:
             good_indices = torch.where(bdmm.values < dist_threshold)[0]
             if len(good_indices) == 0:
                 continue
 
-            gidx = good_indices + int(idx* block_size)
+            gidx = good_indices + int(idx * block_size)
             new_indices_2[gidx] = good_indices + s2_left
             distances[gidx] = bdmm.values[good_indices].float()
         else:
-            new_indices_2[idx* block_size:(idx+1)* block_size] = bdmm.indices + s2_left
-            distances[idx* block_size:(idx+1)* block_size] = bdmm.values
+            new_indices_2[idx * block_size:(idx + 1)
+                          * block_size] = bdmm.indices + s2_left
+            distances[idx * block_size:(idx + 1) * block_size] = bdmm.values
 
     # print((idx+1)* block_size, n_elms)
     # import ipdb; ipdb.set_trace() # fmt: off
@@ -103,3 +104,25 @@ def align_mesh_idx(
         distances[bbids] = bdmm.values.float()
 
     return new_indices_2, distances
+
+
+def read_eeg_locations(
+    eeg_locations_file:Path=Path('params/EEG10-10_UI_Jurak_2007.csv')
+    )-> Dict[str, List[float]]:
+    """Read the EEG locations from the file
+
+    Args:
+        eeg_locations_file (Path): _description_
+
+    Returns:
+        np.ndarray: _description_
+    """
+    with open(eeg_locations_file, 'r') as f:
+        eeg_locations = f.readlines()
+    eeg_info = {}
+    for line in eeg_locations:
+        x, y, z, name = line.strip().split(',')[1:]
+        eeg_info[name] = [float(x), float(y), float(z)]
+
+    # print(eeg_info)
+    return eeg_info
