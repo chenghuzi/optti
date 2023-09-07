@@ -69,12 +69,15 @@ def run_all_sims(model_dir,
                  )
             )
             for (cathode_centre, anode_centre) in eeg_electrode_pairs]
+        sims_res = []
+        if cores == 1:
 
-        for all_arg in all_args[:1]:
-            run_sim_worker(all_arg)
-        # omp.Pool(cores).map(run_sim_worker, all_args[:2])
-            # tdcs_summary['results'] = sims_res
-        # return tdcs_summary
+            for all_arg in all_args[:1]:
+                sims_res.append(run_sim_worker(all_arg))
+        else:
+            sims_res = omp.Pool(cores).map(run_sim_worker, all_args)
+
+        return sims_res
 
 
 class OptTI:
@@ -142,16 +145,18 @@ class OptTI:
             # by default use all physical cores
             cores = omp.cpu_count()
 
-        run_all_sims(self.model_dir, self.pre_calculation_dir,
-                     current,
-                     self.electrode_shape,
-                     self.electrode_dimensions,
-                     self.electrode_thickness,
-                     self.just_gray_matter,
-                     self.electrode_base_pairs,
-                     cores)
+        sims_res = run_all_sims(self.model_dir, self.pre_calculation_dir,
+                                current,
+                                self.electrode_shape,
+                                self.electrode_dimensions,
+                                self.electrode_thickness,
+                                self.just_gray_matter,
+                                self.electrode_base_pairs,
+                                cores)
         print(self.electrode_pairs)
-        # json.dump(tdcs_summary, open(self.summary_f, 'w'), indent=2)
+        json.dump({
+            'sims_res': sims_res
+        }, open(self.summary_f, 'w'), indent=2)
 
     def prune_storage(self) -> None:
         """"""
