@@ -62,6 +62,9 @@
 # dt = time.time() - t0
 # print('Elapsed time: %f s' % dt)
 
-from ti_utils import read_eeg_locations
+# from ti_utils import read_eeg_locations
 
-read_eeg_locations()
+# read_eeg_locations()
+
+import optti
+from optti.optti import OptTI 

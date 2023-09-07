@@ -9,7 +9,7 @@ import simnibs
 import torch
 from simnibs import sim_struct
 
-from ti_utils import align_mesh_idx, find_msh
+from .ti_utils import align_mesh_idx, find_msh
 
 
 def post_process_tDCS_sim(output_dir: Path,

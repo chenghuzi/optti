@@ -6,8 +6,8 @@ from typing import Tuple
 
 # import pathos.multiprocessing as mp
 
-from ti_lib import run_tDCS_sim
-from ti_utils import read_eeg_locations
+from .ti_lib import run_tDCS_sim
+from .ti_utils import read_eeg_locations
 import time
 
 
@@ -19,8 +19,7 @@ def run_sim_worker(a_args):
     anode_centre = args[3]
     finished_count, fc_lock, total_count = mp_args
 
-    res_info = run_tDCS_sim(*args[:-1])
-    time.sleep(0.01)
+    res_info = run_tDCS_sim(*args)
     with fc_lock:
         finished_count.value += 1
         print(f'({pid}) Finished {finished_count.value} of {total_count} \
@@ -34,7 +33,8 @@ simulations. Using {cathode_centre}-{anode_centre}.')
     }
 
 
-def run_all_sims(model_dir, pre_calculation_dir,
+def run_all_sims(model_dir,
+                 pre_calculation_dir,
                  current,
                  electrode_shape,
                  electrode_dimensions,
@@ -59,6 +59,7 @@ def run_all_sims(model_dir, pre_calculation_dir,
                  electrode_dimensions,
                  electrode_thickness,
                  1,
+                 1,
                  False,
                  just_gray_matter,
                  ),
@@ -69,11 +70,11 @@ def run_all_sims(model_dir, pre_calculation_dir,
             )
             for (cathode_centre, anode_centre) in eeg_electrode_pairs]
 
-        with omp.Pool(cores) as pool:
-            tdcs_summary = {}
-            sims_res = pool.map(run_sim_worker, all_args)
-            tdcs_summary['results'] = sims_res
-        return tdcs_summary
+        for all_arg in all_args[:1]:
+            run_sim_worker(all_arg)
+        # omp.Pool(cores).map(run_sim_worker, all_args[:2])
+            # tdcs_summary['results'] = sims_res
+        # return tdcs_summary
 
 
 class OptTI:
@@ -141,16 +142,16 @@ class OptTI:
             # by default use all physical cores
             cores = omp.cpu_count()
 
-        tdcs_summary = run_all_sims(self.model_dir, self.pre_calculation_dir,
-                                    current,
-                                    self.electrode_shape,
-                                    self.electrode_dimensions,
-                                    self.electrode_thickness,
-                                    self.just_gray_matter,
-                                    self.electrode_base_pairs,
-                                    cores)
+        run_all_sims(self.model_dir, self.pre_calculation_dir,
+                     current,
+                     self.electrode_shape,
+                     self.electrode_dimensions,
+                     self.electrode_thickness,
+                     self.just_gray_matter,
+                     self.electrode_base_pairs,
+                     cores)
         print(self.electrode_pairs)
-        json.dump(tdcs_summary, open(self.summary_f, 'w'), indent=2)
+        # json.dump(tdcs_summary, open(self.summary_f, 'w'), indent=2)
 
     def prune_storage(self) -> None:
         """"""

@@ -3,33 +3,34 @@ import platform
 
 
 def get_simnibs_url(version):
-    python_version = platform.python_version()[:3]
+    python_version = platform.python_version()[:3].replace('.', '')
     system = platform.system().lower()
     machine = platform.machine().lower()
-
-    # if system == 'windows':
-    #     platform_url = f"cp{python_version}-cp{python_version}-{system}_{machine}"
-    # else:
     platform_url = f"cp{python_version}-cp{python_version}-{system}_{machine}"
 
     simnibs_url = f'https://github.com/simnibs/simnibs/releases/download\
-        /v{version}/simnibs-{version}-{platform_url}.whl'
+/v{version}/simnibs-{version}-{platform_url}.whl'
     return simnibs_url
 
 
 setup(
     name='optti',
     version='0.1',
-    packages=find_packages(),
+    packages=find_packages(
+        exclude=['tests', 'tests.*', 'local.*', 'models', 'wandb']),
+
     install_requires=[
-        get_simnibs_url('4.0.0'),
+        f'simnibs @ {get_simnibs_url("4.0.1")}',
         'numpy',
         'torch',
         'tqdm',
         'pandas',
         'meshio',
-        # Add any other dependencies you need here
+        'matplotlib',
     ],
+    package_data={
+        'optti': ['params/*'],
+    },
     # entry_points={
     #     'console_scripts': [
     #         'eye-ti=eye_ti.main:main',
