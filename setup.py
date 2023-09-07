@@ -31,6 +31,7 @@ setup(
     package_data={
         'optti': ['params/*'],
     },
+    python_requires='~=3.9',
     # entry_points={
     #     'console_scripts': [
     #         'eye-ti=eye_ti.main:main',
