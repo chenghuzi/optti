@@ -33,6 +33,7 @@ def align_mesh_idx(
     dist_threshold: float = 1.0,
     block_size: int = 400,
     residual_block_size: int = 20,
+    verbose: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Now since the dimensionality of the meshes are different, we need to
@@ -47,6 +48,10 @@ def align_mesh_idx(
         elm_centers_base (torch.Tensor): _description_
         elm_centers2 (torch.Tensor): _description_
         device (str): _description_
+        dist_threshold (float, optional): _description_. Defaults to 1.0.
+        block_size (int, optional): _description_. Defaults to 400.
+        residual_block_size (int, optional): _description_. Defaults to 20.
+        verbose (bool, optional): _description_. Defaults to False.
 
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: _description_
@@ -57,7 +62,11 @@ def align_mesh_idx(
     new_indices_2 = torch.zeros(n_elms, dtype=torch.int64).to(device) - 1
     distances = (torch.zeros(n_elms, dtype=torch.int64).to(device) - 1).float()
 
-    for idx in tqdm(range(n_elms // block_size + 1)):
+    pbar = range(n_elms // block_size + 1)
+    if verbose:
+        pbar = tqdm(pbar)
+
+    for idx in pbar:
         # TODO: we can add some repeated elements in the corner
         s2_left = idx * block_size
         s2_right = (idx + 1) * block_size
@@ -85,16 +94,18 @@ def align_mesh_idx(
                           * block_size] = bdmm.indices + s2_left
             distances[idx * block_size:(idx + 1) * block_size] = bdmm.values
 
-    # print((idx+1)* block_size, n_elms)
-    # import ipdb; ipdb.set_trace() # fmt: off
-    bad_ids = torch.where(new_indices_2<0)[0]
+    bad_ids = torch.where(new_indices_2 < 0)[0]
 
-    for idx in tqdm(range(len(bad_ids)//residual_block_size+1)):
-        s2_left = idx*residual_block_size #bad_ids[idx*sz]
-        if (idx+1)*residual_block_size >= len(bad_ids):
+    pbar_residual = range(len(bad_ids) // residual_block_size + 1)
+    if verbose:
+        pbar = tqdm(pbar_residual)
+
+    for idx in pbar_residual:
+        s2_left = idx * residual_block_size  # bad_ids[idx*sz]
+        if (idx + 1) * residual_block_size >= len(bad_ids):
             s2_right = len(bad_ids)
         else:
-            s2_right = (idx+1)*residual_block_size
+            s2_right = (idx + 1) * residual_block_size
         bbids = bad_ids[s2_left:s2_right]
         bdmm = torch.cdist(
             elm_centers_base[bbids],
@@ -107,8 +118,8 @@ def align_mesh_idx(
 
 
 def read_eeg_locations(
-    eeg_locations_file:Path=Path('params/EEG10-10_UI_Jurak_2007.csv')
-    )-> Dict[str, List[float]]:
+    eeg_locations_file: Path = Path('params/EEG10-10_UI_Jurak_2007.csv')
+) -> Dict[str, List[float]]:
     """Read the EEG locations from the file
 
     Args:
@@ -124,5 +135,4 @@ def read_eeg_locations(
         x, y, z, name = line.strip().split(',')[1:]
         eeg_info[name] = [float(x), float(y), float(z)]
 
-    # print(eeg_info)
     return eeg_info

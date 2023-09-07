@@ -1,14 +1,15 @@
 import shutil
 import time
 from pathlib import Path
-from typing import Tuple, Union, Dict
+from typing import Dict, List, Tuple, Union
 
+import matplotlib.pyplot as plt
 import numpy as np
 import simnibs
 import torch
 from simnibs import sim_struct
-from ti_utils import find_msh, align_mesh_idx
-import matplotlib.pyplot as plt
+
+from ti_utils import align_mesh_idx, find_msh
 
 
 def post_process_tDCS_sim(output_dir: Path,
@@ -252,8 +253,6 @@ def analyze_tDCS_sim(subject_dir: Path, output_dir: Path):
 def compute_TI_max_magnitude(
         vecE_base: torch.Tensor,
         vecE_2: torch.Tensor,
-        magnE_base: torch.Tensor,
-        magnE_2: torch.Tensor,
         eps: float = 1e-16,
         tof16: bool = True,
 ) -> torch.Tensor:
@@ -268,10 +267,6 @@ def compute_TI_max_magnitude(
             electric field vector.
         vecE_2 (torch.Tensor): A tensor of shape (N, 3) representing the second
             electric field vector.
-        magnE_base (torch.Tensor): A tensor of shape (N,) representing the
-            magnitudes of the base electric field vectors.
-        magnE_2 (torch.Tensor): A tensor of shape (N,) representing the
-            magnitudes of the second electric field vectors.
         eps (float, optional): A small value used to avoid division by zero.
             Defaults to 1e-16.
         tof16 (bool, optional): A flag indicating whether to return the result
@@ -280,7 +275,8 @@ def compute_TI_max_magnitude(
     Returns:
         torch.Tensor: A tensor of shape (N,) representing the maximum magnitude of the TI for each pair of electric field vectors.
     """
-
+    magnE_base = vecE_base.norm(dim=1)
+    magnE_2 = vecE_2.norm(dim=1)
     mask = magnE_base > magnE_2
     # flip according to the condition |E1| > |E2|
     tmp_magnE = magnE_base[torch.logical_not(mask)]
@@ -343,7 +339,7 @@ def compute_BE_TI_from_tDCS_sims_int(subject_dir: Path,
     magnE_2 = E_f2_info['magnE'].to(device)
 
     if not elm_centers_base.shape[0] < elm_centers2.shape[0]:
-        print('swapping meshes')
+        # print('swapping meshes')
         elm_centers_base, elm_centers2 = elm_centers2, elm_centers_base
         vecE_base, vecE_2 = vecE_2, vecE_base
         magnE_base, magnE_2 = magnE_2, magnE_base
@@ -364,12 +360,12 @@ def compute_BE_TI_from_tDCS_sims_int(subject_dir: Path,
     return amplitude
 
 
-def analyze_BE_TI_from_tDCS_sims(subject_dir: Path,
+def compute_BE_TI_from_tDCS_sims(subject_dir: Path,
                                  output_dir_1: Path,
                                  output_dir_2: Path,
                                  just_gray_matter: bool = False,
                                  plot_alignment: bool = False,
-                                 ):
+)-> Tuple[torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """Compute the bi-electrode TI effect using two tDCS simulations.
 
     Args:
@@ -396,7 +392,7 @@ def analyze_BE_TI_from_tDCS_sims(subject_dir: Path,
         head_mesh_2.elements_baricenters()[:]).to(device)
 
     if not elm_centers_base.shape[0] < elm_centers2.shape[0]:
-        print('swapping meshes')
+        # print('swapping meshes')
         head_mesh_base, head_mesh_2 = head_mesh_2, head_mesh_base
         elm_centers_base, elm_centers2 = elm_centers2, elm_centers_base
 
@@ -409,17 +405,136 @@ def analyze_BE_TI_from_tDCS_sims(subject_dir: Path,
         plt.savefig('distances-analyze_BE_TI_from_tDCS_sims.png')
 
     elm_centers2 = elm_centers2[new_indices_2]
-
-    magnE_base = torch.from_numpy(head_mesh_base.field['magnE'][:]).to(device)
     vecE_base = torch.from_numpy(head_mesh_base.field['E'][:]).to(device)
-
-    magnE_2 = torch.from_numpy(head_mesh_2.field['magnE'][:]).to(device)[
-        new_indices_2]
     vecE_2 = torch.from_numpy(head_mesh_2.field['E'][:]).to(device)[
         new_indices_2]
 
+    # magnE_base = torch.from_numpy(head_mesh_base.field['magnE'][:]).to(device)
+    # magnE_2 = torch.from_numpy(head_mesh_2.field['magnE'][:]).to(device)[
+    #     new_indices_2]
     # Now let's calculate the max magnitude across the whole model.
-    max_ti_magn = compute_TI_max_magnitude(
-        vecE_base, vecE_2, magnE_base, magnE_2)
-    return max_ti_magn
+    max_ti_magn = compute_TI_max_magnitude(vecE_base, vecE_2)
+    assert max_ti_magn.shape[0] == elm_centers_base.shape[0]
 
+    return elm_centers_base, max_ti_magn, (vecE_base, vecE_2)
+
+
+
+
+def compute_TI_focality(
+    elm_centers: torch.Tensor,
+    max_ti_magn: torch.Tensor,
+    coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
+    rs: Union[List[float], float],
+    )-> Tuple[float, Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """
+    Computes the focality of TI values for a given set of coordinates and radii.
+    # TODO Maybe we need to take volume into account too.
+
+    Args:
+        elm_centers (torch.Tensor): A tensor of shape (n_elms, 3) representing
+            the coordinates of the elements.
+        max_ti_magn (torch.Tensor): A tensor of shape (n_elms,) representing the
+            maximum TI magnitude for each element.
+        coords (Union[Tuple[float, float, float],
+            List[Tuple[float, float, float]]]): A tuple or list of tuples
+            representing the coordinates of the spots.
+        rs (Union[List[float], float]): A float or list of floats representing
+            the radii of the spots.
+
+    Returns:
+        Tuple[float, Tuple[Tuple[float, float], Tuple[float, float]]]: A tuple
+            containing the focality value and a tuple of tuples representing
+            the mean and standard deviation of the focal and non-focal TI
+            magnitudes.
+
+    Example:
+        >>> elm_centers = torch.tensor([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6],
+            [0.7, 0.8, 0.9]])
+        >>> max_ti_magn = torch.tensor([1.0, 2.0, 3.0])
+        >>> coords = [(0.1, 0.2, 0.3), (0.4, 0.5, 0.6)]
+        >>> rs = [0.1, 0.2]
+        >>> compute_TI_focality(elm_centers, max_ti_magn, coords, rs)
+        (1.5, ((2.0, 0.5), (1.0, 0.0)))
+    """
+    if isinstance(coords, tuple):
+        coords = [coords]
+
+    if isinstance(rs, (float, int)):
+        rs = [float(rs)] * len(coords)
+    assert len(coords) == len(rs), 'The number of coordinates and radii \
+        must be the same'
+    for coord, r in zip(coords, rs):
+        assert len(coord) == 3, 'Each coordinate must have 3 values'
+        assert r > 0, 'The radius must be positive'
+
+
+    coords = torch.tensor(coords).double().to(max_ti_magn.device)
+    rs = torch.tensor(rs).double().to(max_ti_magn.device)
+
+
+    dis2spots = torch.cdist(elm_centers, coords)
+    coord_cond = dis2spots < rs # of shape  (n_elms, n_spots)
+    found = coord_cond.any(dim=0).all()
+    if found.float() != 1:
+        raise ValueError('There are some spots that are \
+            not covered by any element. Found ones: {found}')
+
+    coord_mask = coord_cond.any(dim=1).float() # of shape (n_elms,)
+
+    focal_coords = torch.where(coord_mask ==1)
+    nonfocal_coords = torch.where(coord_mask ==0)
+    focal_magn = max_ti_magn[focal_coords]
+    nonfocal_magn = max_ti_magn[nonfocal_coords]
+    focality = focal_magn.mean() / nonfocal_magn.mean()
+
+    return focality.item(), (
+        (focal_magn.mean().item(), focal_magn.std().item()),
+        (nonfocal_magn.mean().item(), nonfocal_magn.std().item()),
+    )
+
+
+
+
+def analyze_TI_from_sims(
+        subject_folder: Path,
+        output_dir_1: Path,
+        output_dir_2: Path,
+        coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
+        rs: Union[List[float], float],
+        **kwargs,
+) -> Tuple[float, dict, List[Tuple[float, float, float]], List[float]]:
+    """
+    Analyzes tDCS simulations to compute the TI focality index and its
+        associated information.
+
+    Args:
+        subject_folder (Path): Path to the subject folder containing the tDCS
+            simulation data.
+        output_dir_1 (Path): Path to the first output directory.
+        output_dir_2 (Path): Path to the second output directory.
+        coords (Union[Tuple[float, float, float], List[Tuple[float, float, float]]]): 
+            Coordinates of the region(s) of interest for computing TI.
+        rs (Union[List[float], float]): Radius or radii of the region(s) of
+            interest for computing TI.
+        kwargs: Additional keyword arguments for `compute_BE_TI_from_tDCS_sims`.
+
+
+    Returns:
+        Tuple[float, dict, List[Tuple[float, float, float]], List[float]]: 
+            A tuple containing the TI focality, its associated information, 
+            the element centers, and the TI magnitudes.
+    """
+
+    elm_centers, ti_magn, _ = compute_BE_TI_from_tDCS_sims(
+        subject_folder,
+        output_dir_1,
+        output_dir_2,
+        **kwargs,
+    )
+
+    focality, focality_info = compute_TI_focality(
+        elm_centers, ti_magn,
+        coords, rs)
+
+    return focality, focality_info, elm_centers, ti_magn

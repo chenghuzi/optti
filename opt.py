@@ -8,27 +8,40 @@ import pandas as pd
 import simnibs
 import torch
 from tqdm import tqdm
-from itertools import combinations, permutations
-from ti_lib import run_tDCS_sim, compute_TI_max_magnitude, analyze_BE_TI_from_tDCS_sims
+from itertools import permutations
+from ti_lib import run_tDCS_sim, analyze_TI_from_sims, compute_BE_TI_from_tDCS_sims
 import json
 import pathos.multiprocessing as mp
 
 
-def determine_base_align_mesh(output_folder: Path):
-    """Determin the base mesh and aligne the other meshes to it.
+# def determine_base_align_mesh(output_folder: Path):
+#     """Determin the base mesh and aligne the other meshes to it.
 
+
+#     Args:
+#         output_folder (Path): _description_
+#     """
+#     pass
+
+
+def pre_compute_tDSC_sims(subject_folder: Path, output_folder: Path,
+                          current: float,
+                          cores: int = 6):
+    """
+    Pre-computes tDCS simulations for all possible electrode pairs.
 
     Args:
-        output_folder (Path): _description_
+    - subject_folder (Path): Path to the folder containing subject data.
+    - output_folder (Path): Path to the folder where the simulation results
+        will be saved.
+    - current (float): The current to be used in the simulation.
+    - cores (int): The number of CPU cores to use for parallel processing.
+
+    Returns:
+    - tdcs_summary (dict): A dictionary containing the simulation results for
+        all electrode pairs.
     """
-    pass
 
-
-def main():
-    cores = 6
-    # Input and output folders
-    subject_folder = Path('data/m2m_ernie')
-    output_folder = Path('data/single_sgp_sims/')
     summary_f = output_folder / 'summary.json'
 
     output_folder.mkdir(exist_ok=True)
@@ -37,8 +50,6 @@ def main():
         'data/m2m_ernie/eeg_positions/EEG10-10_UI_Jurak_2007.csv', header=None)
     locations = eeg_loc_df[4].values[:3]
 
-    # current = 1mA
-    current = 0.001
     tdcs_summary = {'results': []}
     electrode_pairs = list(permutations(locations, 2))
     all_args = [
@@ -60,66 +71,49 @@ def main():
             'res_info': res_info,
         }
 
-    # t0 = time.time()
-    # res_all = mp.Pool(cores).map(run_sim_wrapper, all_args)
-    # dt = time.time() - t0
-    # tdcs_summary['results'] = res_all
-    # print(f'Finished in {dt} seconds. Efficiency: {dt/ len(all_args)}')
-    # json.dump(tdcs_summary, open(summary_f, 'w'), indent=2)
-
-    # for (cathode_centre, anode_centre) in electrode_pairs:
-    #     res_dir = run_tDCS_sim(
-    #         subject_folder,
-    #         output_folder,
-    #         cathode_centre,
-    #         anode_centre,
-    #         current,
-    #     )
-    #     tdcs_summary['results'].append([
-    #         cathode_centre,
-    #         anode_centre,
-    #         str(res_dir)d,
-    #     ])
-    #     json.dump(tdcs_summary, open(summary_f, 'w'), indent=2)
+    t0 = time.time()
+    res_all = mp.Pool(cores).map(run_sim_wrapper, all_args)
+    dt = time.time() - t0
+    tdcs_summary['results'] = res_all
+    print(f'Finished in {dt} seconds. Efficiency: {dt/ len(all_args)}')
+    json.dump(tdcs_summary, open(summary_f, 'w'), indent=2)
+    return tdcs_summary
 
 
-    # import ipdb; ipdb.set_trace() # fmt: off
-    # cathode, anode
-    # run_tDCS_sim(
-    #     subject_folder,
-    #     output_folder,
-    #     cathode_centre,
-    #     anode_centre,
-    #     current,
-    #     )
+def test():
+    # Input and output folders
+    subject_folder = Path('data/m2m_ernie')
+    output_folder = Path('data/single_sgp_sims/')
 
-    # cathode_centre = 'P7'
-    # anode_centre = 'F7'
-    # run_tDCS_sim(
-    #     subject_folder,
-    #     output_folder,
-    #     cathode_centre,
-    #     anode_centre,
-    #     current,
-    #     )
-    # analyze_tDCS_sim(subject_folder, output_folder)
+    current = 0.001
 
-    output_dir_1 = Path('data/single_sgp_sims/Fp1-Fp2-c-0.001')
-    output_dir_2 = Path('data/single_sgp_sims/Fpz-Fp1-c-0.001')
+    cathode_centre = 'P7'
+    anode_centre = 'F7'
+    output_dir_1 = Path(
+        f'data/single_sgp_sims/{cathode_centre}-{anode_centre}-c-{current}')
+    cathode_centre = 'Fpz'
+    anode_centre = 'Fp1'
+    output_dir_2 = Path(
+        f'data/single_sgp_sims/{anode_centre}-{cathode_centre}-c-{current}')
 
-    # # post_process_tDCS_sim(output_dir_1)
-    # # post_process_tDCS_sim(output_dir_2)
-    # # analyze_BE_TI_from_tDCS_sims_processed(
-    # #     subject_folder,
-    # #     output_dir_1,
-    # #     output_dir_2
-    # # )
+    xyz = (0.7879, 21.1037, -22.0770)
+    r = 2
 
-    analyze_BE_TI_from_tDCS_sims(
+    focality, focality_info, elm_centers, ti_magn = analyze_TI_from_sims(
         subject_folder,
         output_dir_1,
-        output_dir_2
+        output_dir_2,
+        [(xyz[0], xyz[1], xyz[2]),
+            (xyz[0] + 5, xyz[1] + 5, xyz[2] + 5),
+         ],
+        [r, r + 0.1],
     )
+    print(focality, focality_info, elm_centers, ti_magn)
+
+
+def main():
+    test()
+    pass
 
 
 if __name__ == '__main__':
