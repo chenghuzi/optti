@@ -1,4 +1,4 @@
-# OPTTI: Optimization of TI
+# OPTTI: Optimization of Temporal Interference
 
 ## Installation
 
@@ -30,9 +30,13 @@ Run pre-calculations
 ```python
 import optti
 
-opt = optti.Optti('ernie', 'path/to/results/folder')
+model = 'ernie'
+sim_res_dir = 'path/to/simnibs/results/folder'
+opt = optti.OptTI(model, sim_res_dir)
 
+opt.pre_calculate()
 ```
+
 
 Run simulation pruning to reduce the storage size (optional)
 

@@ -151,7 +151,8 @@ def run_tDCS_sim(subject_dir: Path,
 
     # pos_ydirs = ['Cz', 'Cz']
 
-    out_dname = f'{centres[0]}-{centres[1]}-c-{current}'
+    out_dname = f'{centres[0]}-{centres[1]}-c-{current}-{electrode_shape}\
+-{electrode_dimensions}-{electrode_thickness}'
     output_root = output_root / out_dname
 
     if output_root.is_dir():

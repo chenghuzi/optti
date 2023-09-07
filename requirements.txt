@@ -1,5 +1,4 @@
 torch
-pathos
 tqdm
 pandas
 meshio
