@@ -167,3 +167,4 @@ models
 run_ti_dl.py
 wandb
 local_*
+opt.py
