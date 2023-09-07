@@ -7,7 +7,8 @@ import numpy as np
 import simnibs
 import torch
 from simnibs import sim_struct
-from ti_utils import find_msh
+from ti_utils import find_msh, align_mesh_idx
+import matplotlib.pyplot as plt
 
 
 def post_process_tDCS_sim(output_dir: Path,
@@ -40,9 +41,9 @@ def post_process_tDCS_sim(output_dir: Path,
         elm_centers = elm_centers_int,
     ouput_f = output_dir / f'vecE-size-{size}.pt'
     torch.save({
-        'elm_centers': elm_centers,
-        'vecE': vecE,
-        'magnE': magnE,
+        'elm_centers': elm_centers.type(torch.float16),
+        'vecE': vecE.type(torch.float16),
+        'magnE': magnE.type(torch.float16),
     }, ouput_f)
     return ouput_f
 
@@ -247,4 +248,178 @@ def analyze_tDCS_sim(subject_dir: Path, output_dir: Path):
     mean_magnE = np.average(field[roi], weights=elm_vols[roi])
     print('mean ', field_name, ' in M1 ROI: ', mean_magnE)
     pass
+
+def compute_TI_max_magnitude(
+        vecE_base: torch.Tensor,
+        vecE_2: torch.Tensor,
+        magnE_base: torch.Tensor,
+        magnE_2: torch.Tensor,
+        eps: float = 1e-16,
+        tof16: bool = True,
+) -> torch.Tensor:
+    """
+    Computes the maximum magnitude of the Ti simulation.
+    Implementation based on the following papers:
+    - 10.1016/j.cell.2017.05.024
+    - 10.1016/j.brs.2018.09.010
+
+    Args:
+        vecE_base (torch.Tensor): A tensor of shape (N, 3) representing the base
+            electric field vector.
+        vecE_2 (torch.Tensor): A tensor of shape (N, 3) representing the second
+            electric field vector.
+        magnE_base (torch.Tensor): A tensor of shape (N,) representing the
+            magnitudes of the base electric field vectors.
+        magnE_2 (torch.Tensor): A tensor of shape (N,) representing the
+            magnitudes of the second electric field vectors.
+        eps (float, optional): A small value used to avoid division by zero.
+            Defaults to 1e-16.
+        tof16 (bool, optional): A flag indicating whether to return the result
+            as a tensor of dtype torch.float16. Defaults to True.
+
+    Returns:
+        torch.Tensor: A tensor of shape (N,) representing the maximum magnitude of the TI for each pair of electric field vectors.
+    """
+
+    mask = magnE_base > magnE_2
+    # flip according to the condition |E1| > |E2|
+    tmp_magnE = magnE_base[torch.logical_not(mask)]
+    magnE_base[torch.logical_not(mask)] = magnE_2[torch.logical_not(mask)]
+    magnE_2[torch.logical_not(mask)] = tmp_magnE
+
+    # assert (magnE_base > magnE_2).all()
+
+    tmp_E = vecE_base[torch.logical_not(mask)]
+    vecE_base[torch.logical_not(mask)] = vecE_2[torch.logical_not(mask)]
+    vecE_2[torch.logical_not(mask)] = tmp_E
+
+    vec_diffE = vecE_base - vecE_2
+
+    # this is the amplitude when |E1| cos alpha <= |E2|
+    tmp_amp = torch.cross(vecE_2, vec_diffE, dim=1).norm(
+        dim=1) / vec_diffE.norm(dim=1)
+
+    cosine_alpha = torch.abs((vecE_base * vecE_2).sum(dim=1) / (
+        vecE_base.norm(dim=1) * vecE_2.norm(dim=1)
+    ))
+    # this is the condition when |E1| cos alpha > |E2|
+    angle_mask = (magnE_base * cosine_alpha > magnE_2).float()
+
+    amplitude = 2 * (angle_mask * magnE_2 + (1 - angle_mask) * tmp_amp)
+    if tof16:
+        return amplitude.half()
+    else:
+        return amplitude
+
+
+def compute_BE_TI_from_tDCS_sims_int(subject_dir: Path,
+                                     output_dir_1: Path,
+                                     output_dir_2: Path,
+                                     integer_size: int = 1,
+                                     plot_alignment: bool = False,
+                                     ):
+    """Compute the bi-electrode TI effect using two tDCS simulations with
+        integer mesh coordinates.
+
+    Args:
+        subject_dir (Path): The subject directory.
+        output_dir_1 (Path): The output directory of the first simulation.
+        output_dir_2 (Path): The output directory of the second simulation.
+        integer_size (int, optional): The size of the integer mesh coordinates.
+        plot_alignment (bool, optional): A flag indicating whether to plot the
+            alignment of the meshes. Defaults to False.
+    """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    E_f1_info = torch.load(output_dir_1 / f'vecE-size-{integer_size}.pt')
+    E_f2_info = torch.load(output_dir_2 / f'vecE-size-{integer_size}.pt')
+
+    elm_centers_base = E_f1_info['elm_centers_int'].float().to(device)
+    vecE_base = E_f1_info['vecE'].to(device)
+    magnE_base = E_f1_info['magnE'].to(device)
+
+    elm_centers2 = E_f2_info['elm_centers_int'].float().to(device)
+    vecE_2 = E_f2_info['vecE'].to(device)
+    magnE_2 = E_f2_info['magnE'].to(device)
+
+    if not elm_centers_base.shape[0] < elm_centers2.shape[0]:
+        print('swapping meshes')
+        elm_centers_base, elm_centers2 = elm_centers2, elm_centers_base
+        vecE_base, vecE_2 = vecE_2, vecE_base
+        magnE_base, magnE_2 = magnE_2, magnE_base
+
+    new_indices_2, distances = align_mesh_idx(elm_centers_base, elm_centers2,
+                                              device,
+                                              block_size=20,
+                                              dist_threshold=2
+                                              )
+    if plot_alignment:
+        plt.hist(distances.data.cpu().numpy(), bins=100)
+        plt.savefig('distances-compute_BE_TI_from_tDCS_sims_int.png')
+
+    elm_centers2 = elm_centers2[new_indices_2]
+
+    amplitude = compute_TI_max_magnitude(
+        vecE_base, vecE_2, magnE_base, magnE_2)
+    return amplitude
+
+
+def analyze_BE_TI_from_tDCS_sims(subject_dir: Path,
+                                 output_dir_1: Path,
+                                 output_dir_2: Path,
+                                 just_gray_matter: bool = False,
+                                 plot_alignment: bool = False,
+                                 ):
+    """Compute the bi-electrode TI effect using two tDCS simulations.
+
+    Args:
+        subject_dir (Path): The subject directory.
+        output_dir_1 (Path): The output directory of the first simulation.
+        output_dir_2 (Path): The output directory of the second simulation.
+        just_gray_matter (bool, optional): A flag indicating whether to just
+            consider the gray matter part. Defaults to False. This will save
+            some computation time if True.
+    """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    head_mesh_base = simnibs.read_msh(find_msh(output_dir_1))
+    if just_gray_matter:
+        head_mesh_base = head_mesh_base.crop_mesh(2)
+    elm_centers_base = torch.from_numpy(
+        head_mesh_base.elements_baricenters()[:]).to(device)
+
+    head_mesh_2 = simnibs.read_msh(find_msh(output_dir_2))
+    if just_gray_matter:
+        head_mesh_2 = head_mesh_2.crop_mesh(2)
+
+    elm_centers2 = torch.from_numpy(
+        head_mesh_2.elements_baricenters()[:]).to(device)
+
+    if not elm_centers_base.shape[0] < elm_centers2.shape[0]:
+        print('swapping meshes')
+        head_mesh_base, head_mesh_2 = head_mesh_2, head_mesh_base
+        elm_centers_base, elm_centers2 = elm_centers2, elm_centers_base
+
+    new_indices_2, distances = align_mesh_idx(
+        elm_centers_base, elm_centers2, device)
+
+
+    if plot_alignment:
+        plt.hist(distances.data.cpu().numpy(), bins=100)
+        plt.savefig('distances-analyze_BE_TI_from_tDCS_sims.png')
+
+    elm_centers2 = elm_centers2[new_indices_2]
+
+    magnE_base = torch.from_numpy(head_mesh_base.field['magnE'][:]).to(device)
+    vecE_base = torch.from_numpy(head_mesh_base.field['E'][:]).to(device)
+
+    magnE_2 = torch.from_numpy(head_mesh_2.field['magnE'][:]).to(device)[
+        new_indices_2]
+    vecE_2 = torch.from_numpy(head_mesh_2.field['E'][:]).to(device)[
+        new_indices_2]
+
+    # Now let's calculate the max magnitude across the whole model.
+    max_ti_magn = compute_TI_max_magnitude(
+        vecE_base, vecE_2, magnE_base, magnE_2)
+    return max_ti_magn
 
