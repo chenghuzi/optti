@@ -28,6 +28,9 @@ setup(
         'meshio',
         'matplotlib',
     ],
+    extras_require={
+        'dev': ['ipdb'],
+    },
     package_data={
         'optti': ['params/*'],
     },

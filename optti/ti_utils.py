@@ -56,7 +56,8 @@ def align_mesh_idx(
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: _description_
     """
-
+    elm_centers_base = elm_centers_base.float().to(device)
+    elm_centers2 = elm_centers2.float().to(device)
     n_elms = elm_centers_base.shape[0]
 
     new_indices_2 = torch.zeros(n_elms, dtype=torch.int64).to(device) - 1

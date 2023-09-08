@@ -2,12 +2,13 @@ import json
 import multiprocessing as omp
 from itertools import combinations, permutations
 from pathlib import Path
+import torch
 from typing import Tuple
 
 # import pathos.multiprocessing as mp
 
 from .ti_lib import run_tDCS_sim
-from .ti_utils import read_eeg_locations
+from .ti_utils import read_eeg_locations, align_mesh_idx
 import time
 
 
@@ -88,7 +89,9 @@ class OptTI:
                  electrode_shape: str = 'ellipse',
                  electrode_dimensions: Tuple = (10, 10),
                  electrode_thickness=5,
+                 current: float = 0.01,
                  just_gray_matter: bool = False,
+                 device: str = 'cpu'
                  ) -> None:
         """
 
@@ -108,6 +111,9 @@ class OptTI:
             just_gray_matter (bool, optional): Whether to only consider
                 gray matter. Defaults to False.
         """
+        if device == 'cuda':
+            assert torch.cuda.is_available()
+        self.device = device
 
         self.model_dir = Path(model_dir)
 
@@ -130,9 +136,10 @@ class OptTI:
         self.electrode_shape = electrode_shape
         self.electrode_dimensions = electrode_dimensions
         self.electrode_thickness = electrode_thickness
+        self.current = current
         self.just_gray_matter = just_gray_matter
 
-    def pre_calculate(self, current: float = 0.01, cores: int = -1):
+    def pre_calculate(self, cores: int = -1):
         """Calculate all necessary data for the optimization.
         """
         self.summary_f = self.pre_calculation_dir / \
@@ -146,7 +153,7 @@ class OptTI:
             cores = omp.cpu_count()
 
         sims_res = run_all_sims(self.model_dir, self.pre_calculation_dir,
-                                current,
+                                self.current,
                                 self.electrode_shape,
                                 self.electrode_dimensions,
                                 self.electrode_thickness,
@@ -154,32 +161,80 @@ class OptTI:
                                 self.electrode_base_pairs,
                                 cores)
         print(self.electrode_pairs)
-        json.dump({
-            'sims_res': sims_res
-        }, open(self.summary_f, 'w'), indent=2)
+        # json.dump({
+        #     'sims_res': sims_res
+        # }, open(self.summary_f, 'w'), indent=2)
 
     def prune_storage(self) -> None:
         """"""
         pass
 
-    def simulate(self, e1: str, e2: str):
-        assert (e1, e2) in self.electrodes
+    def _read_sim_directly(self, e1: str, e2: str) -> torch.Tensor:
+        res_dir = self.pre_calculation_dir / \
+            (f'{e1}-{e2}-c-{self.current}-{self.electrode_shape}' +
+             f'-{self.electrode_dimensions}-{self.electrode_thickness}')
+
+        print(res_dir)
+        assert res_dir.is_dir()
+        res_tensors = res_dir / 'vecE-size-1.pt'
+        assert res_tensors.is_file()
+        res = torch.load(res_tensors)
+        return res
+
+    def read_sim(self, e1: str, e2: str):
+        print(e1, e2)
+        assert e1 in self.electrodes and e2 in self.electrodes
         if e1 == self.electrode_ref:
             # we can directly get the result
-            pass
+            res = self._read_sim_directly(e1, e2)
+            res['elm_centers'] = res['elm_centers'].to(self.device)
+            res['vecE'] = res['vecE'].to(self.device)
+            res['magnE'] = res['magnE'].to(self.device)
+            return res
+
         elif e2 == self.electrode_ref:
             # we can get (e2, e1) result and then invert it
             # with E((e1, e2)) = -E((e2, e1))
-            pass
+            res = self._read_sim_directly(e2, e1)
+            res['vecE'] = -res['vecE']  # Other parts are the same except vecE.
+
+            res['elm_centers'] = res['elm_centers'].to(self.device)
+            res['vecE'] = res['vecE'].to(self.device)
+            res['magnE'] = res['magnE'].to(self.device)
+            return res
         else:
             # we can compute (e_ref, e1) and (e_ref, e2) and then
             # get E(e1, e2) by E((e_ref, e2)) - E((e_ref, e1))
+            e_ref = self.electrode_ref
+            ep_base_1 = (e_ref, e1)
+            ep_base_2 = (e_ref, e2)
+            res_ep1 = self.read_sim(ep_base_1[0], ep_base_1[1])
+            res_ep2 = self.read_sim(ep_base_2[0], ep_base_2[1])
+            # if len(res_ep1['elm_centers']) > len(res_ep2['elm_centers']):
+            new_indices_ep2, distances_ep2 = align_mesh_idx(
+                res_ep1['elm_centers'], res_ep2['elm_centers'],
+                self.device,
+                block_size=20,
+                dist_threshold=2,
+                verbose=True,
+            )
+            res_ep1['elm_centers'] = res_ep1['elm_centers'].to(self.device)
+            res_ep1['vecE'] = res_ep1['vecE'].to(self.device)
+            res_ep1['magnE'] = res_ep1['magnE'].to(self.device)
 
-            pass
-            # cathode = e1
-            # anode = e2
+            res_ep2['elm_centers'] = res_ep2['elm_centers'].to(self.device)[
+                new_indices_ep2]
+            res_ep2['vecE'] = res_ep2['vecE'].to(self.device)[new_indices_ep2]
+            res_ep2['magnE'] = res_ep2['magnE'].to(self.device)[
+                new_indices_ep2]
 
-        pass
+            vecE_diff = res_ep2['vecE'] - res_ep1['vecE']
+            vecE_diff_norm = torch.norm(vecE_diff, dim=1)
+            return {
+                'elm_centers': res_ep1['elm_centers'],
+                'vecE': vecE_diff,
+                'magnE': vecE_diff_norm,
+            }
 
     def run(self):
         pass
