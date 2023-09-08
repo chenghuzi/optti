@@ -4,7 +4,7 @@ from itertools import combinations, permutations
 from pathlib import Path
 import torch
 from typing import Tuple
-
+from tqdm import tqdm
 # import pathos.multiprocessing as mp
 
 from .ti_lib import run_tDCS_sim
@@ -86,10 +86,10 @@ class OptTI:
     def __init__(self, model_dir: str,
                  pre_calculation_dir: str,
                  eeg_coord_sys: str = '10-10',
-                 electrode_shape: str = 'ellipse',
+                 electrode_shape: str = 'rect',
                  electrode_dimensions: Tuple = (10, 10),
                  electrode_thickness=5,
-                 current: float = 0.01,
+                 current: float = 0.001,
                  just_gray_matter: bool = False,
                  device: str = 'cpu'
                  ) -> None:
@@ -108,6 +108,8 @@ class OptTI:
                 electrodes. Defaults to (10, 10). Unit is mm.
             electrode_thickness (int, optional): The thickness of
                 the electrodes. Defaults to 5.
+            current (float, optional): The current used in the simulation.
+                Defaults to 0.001, i.e., 1 mA.
             just_gray_matter (bool, optional): Whether to only consider
                 gray matter. Defaults to False.
         """
@@ -133,6 +135,7 @@ class OptTI:
         self.electrode_pairs = list(
             permutations(self.electrodes, 2))
 
+        assert electrode_shape in ['rect', 'ellipse']
         self.electrode_shape = electrode_shape
         self.electrode_dimensions = electrode_dimensions
         self.electrode_thickness = electrode_thickness
@@ -165,28 +168,67 @@ class OptTI:
         #     'sims_res': sims_res
         # }, open(self.summary_f, 'w'), indent=2)
 
+    @staticmethod
+    def sim_dir_fn_gen(pre_cal_dir: Path, e1, e2, c, e_shape,
+                       e_dim, e_thc) -> Path:
+        res_dir = pre_cal_dir / f'{e1}-{e2}-c-{c}-{e_shape}-{e_dim}-{e_thc}'
+        return res_dir
+
+    def align_mesh(self):
+        """Specify a base electrode pair and align all other simulations
+        to the base pair.
+        """
+
+        base_ep = self.electrode_base_pairs[0]
+        base_res, _ = self._read_sim_directly(base_ep[0], base_ep[1])
+        base_res['elm_centers'] = base_res['elm_centers'].to(self.device)
+        base_res['vecE'] = base_res['vecE'].to(self.device)
+        base_res['magnE'] = base_res['magnE'].to(self.device)
+        other_eps = self.electrode_base_pairs[1:]
+
+        for ep in tqdm(other_eps):
+            res, res_fn = self._read_sim_directly(ep[0], ep[1])
+            res['elm_centers'] = res['elm_centers'].to(self.device)
+            res['vecE'] = res['vecE'].to(self.device)
+            res['magnE'] = res['magnE'].to(self.device)
+            # align mesh indices
+
+            new_indices, _distances = align_mesh_idx(
+                base_res['elm_centers'], res['elm_centers'],
+                self.device,
+                block_size=20,
+                dist_threshold=2,
+                verbose=True,
+            )
+            res['elm_centers'] = res['elm_centers'][new_indices].to('cpu')
+            res['vecE'] = res['vecE'][new_indices].to('cpu')
+            res['magnE'] = res['magnE'][new_indices].to('cpu')
+            res['aligned'] = True
+            # save the aligned results
+            torch.save(res, res_fn)
+
     def prune_storage(self) -> None:
         """"""
         pass
 
-    def _read_sim_directly(self, e1: str, e2: str) -> torch.Tensor:
-        res_dir = self.pre_calculation_dir / \
-            (f'{e1}-{e2}-c-{self.current}-{self.electrode_shape}' +
-             f'-{self.electrode_dimensions}-{self.electrode_thickness}')
-
-        print(res_dir)
+    def _read_sim_directly(self, e1: str, e2: str) -> Tuple[torch.Tensor, Path]:
+        res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
+                                      e1, e2, self.current,
+                                      self.electrode_shape,
+                                      self.electrode_dimensions,
+                                      self.electrode_thickness)
         assert res_dir.is_dir()
-        res_tensors = res_dir / 'vecE-size-1.pt'
+        res_tensors = res_dir / 'vecE.pt'
         assert res_tensors.is_file()
         res = torch.load(res_tensors)
-        return res
+        return res, res_tensors
 
     def read_sim(self, e1: str, e2: str):
         print(e1, e2)
         assert e1 in self.electrodes and e2 in self.electrodes
         if e1 == self.electrode_ref:
             # we can directly get the result
-            res = self._read_sim_directly(e1, e2)
+            res, _ = self._read_sim_directly(e1, e2)
             res['elm_centers'] = res['elm_centers'].to(self.device)
             res['vecE'] = res['vecE'].to(self.device)
             res['magnE'] = res['magnE'].to(self.device)
@@ -195,7 +237,7 @@ class OptTI:
         elif e2 == self.electrode_ref:
             # we can get (e2, e1) result and then invert it
             # with E((e1, e2)) = -E((e2, e1))
-            res = self._read_sim_directly(e2, e1)
+            res, _ = self._read_sim_directly(e2, e1)
             res['vecE'] = -res['vecE']  # Other parts are the same except vecE.
 
             res['elm_centers'] = res['elm_centers'].to(self.device)
@@ -211,7 +253,7 @@ class OptTI:
             res_ep1 = self.read_sim(ep_base_1[0], ep_base_1[1])
             res_ep2 = self.read_sim(ep_base_2[0], ep_base_2[1])
             # if len(res_ep1['elm_centers']) > len(res_ep2['elm_centers']):
-            new_indices_ep2, distances_ep2 = align_mesh_idx(
+            new_indices_ep2, _distances_ep2 = align_mesh_idx(
                 res_ep1['elm_centers'], res_ep2['elm_centers'],
                 self.device,
                 block_size=20,

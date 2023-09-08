@@ -21,6 +21,19 @@ def post_process_tDCS_sim(output_dir: Path,
     """
     msh_f = output_dir / 'ernie_TDCS_1_scalar.msh'
     head_mesh = simnibs.read_msh(msh_f)
+    # Here we only care about volumes
+    tags_needed = [
+        1,  # WM
+        2,  # GM
+        3,  # CSF
+        5,  # Scalp
+        6,  # Eye_balls,
+        7,  # Compact_bone
+        8,  # Spongy_bone
+        9,  # Blood
+        10,  # Muscle
+    ]
+    head_mesh = head_mesh.crop_mesh(tags_needed)
     if just_gray_matter:
         head_mesh = head_mesh.crop_mesh(2)
     vecE = torch.from_numpy(head_mesh.field['E'][:])
@@ -40,7 +53,7 @@ def post_process_tDCS_sim(output_dir: Path,
         magnE = magnE[indices_tensor]
 
         elm_centers = elm_centers_int,
-    ouput_f = output_dir / f'vecE-size-{size}.pt'
+    ouput_f = output_dir / 'vecE.pt'
     torch.save({
         'elm_centers': elm_centers.type(torch.float16),
         'vecE': vecE.type(torch.float16),

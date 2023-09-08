@@ -76,12 +76,16 @@ def align_mesh_idx(
         # s2_right = min(n_elms, int(s2_right + block_size * 9))
         s2_right = int(s2_right + block_size * 9)
 
+        ec_base = elm_centers_base[idx * block_size:(idx + 1) * block_size]
+        if ec_base.shape[0] == 0:
+            break
+
         block_dist_matrix = torch.cdist(
-            elm_centers_base[idx * block_size:(idx + 1) * block_size],
+            ec_base,
             elm_centers2[s2_left:s2_right])
-
+        # try:
         bdmm = block_dist_matrix.min(dim=1)
-
+        # if len(bdmm.values)
         if bdmm.values.max() > dist_threshold:
             good_indices = torch.where(bdmm.values < dist_threshold)[0]
             if len(good_indices) == 0:
@@ -93,7 +97,13 @@ def align_mesh_idx(
         else:
             new_indices_2[idx * block_size:(idx + 1)
                           * block_size] = bdmm.indices + s2_left
-            distances[idx * block_size:(idx + 1) * block_size] = bdmm.values
+            distances[idx * block_size:(idx + 1)
+                      * block_size] = bdmm.values
+
+        # except Exception as e:
+        #     print(e)
+        #     import ipdb; ipdb.set_trace() # fmt: off
+        #     pass
 
     bad_ids = torch.where(new_indices_2 < 0)[0]
 
