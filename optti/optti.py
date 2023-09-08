@@ -180,7 +180,10 @@ class OptTI:
         """
 
         base_ep = self.electrode_base_pairs[0]
-        base_res, _ = self._read_sim_directly(base_ep[0], base_ep[1])
+        base_res, base_res_fn = self._read_sim_directly(base_ep[0], base_ep[1])
+        base_res['aligned'] = True
+        torch.save(base_res, base_res_fn)
+
         base_res['elm_centers'] = base_res['elm_centers'].to(self.device)
         base_res['vecE'] = base_res['vecE'].to(self.device)
         base_res['magnE'] = base_res['magnE'].to(self.device)
@@ -188,6 +191,8 @@ class OptTI:
 
         for ep in tqdm(other_eps):
             res, res_fn = self._read_sim_directly(ep[0], ep[1])
+            if 'aligned' in res and res['aligned']:
+                continue
             res['elm_centers'] = res['elm_centers'].to(self.device)
             res['vecE'] = res['vecE'].to(self.device)
             res['magnE'] = res['magnE'].to(self.device)
@@ -251,8 +256,11 @@ class OptTI:
             ep_base_1 = (e_ref, e1)
             ep_base_2 = (e_ref, e2)
             res_ep1 = self.read_sim(ep_base_1[0], ep_base_1[1])
+            res_ep1['elm_centers'] = res_ep1['elm_centers'].to(self.device)
+            res_ep1['vecE'] = res_ep1['vecE'].to(self.device)
+            res_ep1['magnE'] = res_ep1['magnE'].to(self.device)
+
             res_ep2 = self.read_sim(ep_base_2[0], ep_base_2[1])
-            # if len(res_ep1['elm_centers']) > len(res_ep2['elm_centers']):
             new_indices_ep2, _distances_ep2 = align_mesh_idx(
                 res_ep1['elm_centers'], res_ep2['elm_centers'],
                 self.device,
@@ -260,15 +268,16 @@ class OptTI:
                 dist_threshold=2,
                 verbose=True,
             )
-            res_ep1['elm_centers'] = res_ep1['elm_centers'].to(self.device)
-            res_ep1['vecE'] = res_ep1['vecE'].to(self.device)
-            res_ep1['magnE'] = res_ep1['magnE'].to(self.device)
-
-            res_ep2['elm_centers'] = res_ep2['elm_centers'].to(self.device)[
-                new_indices_ep2]
-            res_ep2['vecE'] = res_ep2['vecE'].to(self.device)[new_indices_ep2]
-            res_ep2['magnE'] = res_ep2['magnE'].to(self.device)[
-                new_indices_ep2]
+            if 'aligned' in res_ep2 and res_ep2['aligned']:
+                aligned = True
+            else:
+                res_ep2['elm_centers'] = res_ep2['elm_centers'].to(self.device)[
+                    new_indices_ep2]
+                res_ep2['vecE'] = res_ep2['vecE'].to(self.device)[
+                    new_indices_ep2]
+                res_ep2['magnE'] = res_ep2['magnE'].to(self.device)[
+                    new_indices_ep2]
+                aligned = False
 
             vecE_diff = res_ep2['vecE'] - res_ep1['vecE']
             vecE_diff_norm = torch.norm(vecE_diff, dim=1)
@@ -276,6 +285,7 @@ class OptTI:
                 'elm_centers': res_ep1['elm_centers'],
                 'vecE': vecE_diff,
                 'magnE': vecE_diff_norm,
+                'aligned': aligned,
             }
 
     def run(self):
