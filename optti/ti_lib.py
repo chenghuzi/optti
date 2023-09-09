@@ -480,24 +480,36 @@ def compute_TI_focality(
     if mesh_mask is not None:
         coord_mask = torch.logical_and(coord_mask, mesh_mask)
 
-
     focal_coords = torch.where(coord_mask == torch.tensor(True))
-    nonfocal_coords = torch.where(coord_mask ==torch.tensor(False))
+
+    # this actually considers many other elements other than the GM and WM
+    nonfocal_coords = torch.where(coord_mask == torch.tensor(False)) 
     focal_magn = max_ti_magn[focal_coords]
     nonfocal_magn = max_ti_magn[nonfocal_coords]
     if mesh_vols is not None:
-        focal_vol = mesh_vols[focal_coords].sum()
-        focal_magn = (focal_magn * mesh_vols[focal_coords]).sum() / focal_vol
+        # method 1
+        focal_vol = mesh_vols[focal_coords].sum() # total volume
+        focal_magn = (focal_magn * mesh_vols[focal_coords]).sum() # total magnitude
+
+        focal_magn = focal_magn / focal_vol # average density
 
         nonfocal_vol = mesh_vols[nonfocal_coords].sum()
         nonfocal_magn = (nonfocal_magn * mesh_vols[nonfocal_coords]).sum() / nonfocal_vol
+
+        # # method 2
+        # eps = 1e-16
+        # focal_magn = focal_magn / (mesh_vols[focal_coords] + eps)
+        # focal_magn = focal_magn.mean()
+
+        # nonfocal_magn = nonfocal_magn / (mesh_vols[nonfocal_coords] + eps)
+        # nonfocal_magn = nonfocal_magn.mean()
         # mesh_weights = mesh_vols / mesh_vols.sum()
         pass
     else:
         focal_magn = focal_magn.mean()
         nonfocal_magn = nonfocal_magn.mean()
 
-    focality = focal_magn/ nonfocal_magn
+    focality = focal_magn / nonfocal_magn
 
     return focality.item()
 
@@ -559,7 +571,11 @@ def res2mask_and_vol(res_tensors: Path, device: str, just_gray_matter: bool):
             head_mesh.elm.tag1 == 2
         ).to(device)
     else:
-        mesh_mask = torch.ones(head_mesh.elm.nr).bool().to(device)
+        # mesh_mask = torch.ones(head_mesh.elm.nr).bool().to(device)
+        # import ipdb; ipdb.set_trace() # fmt: off
+        mask_123 = (head_mesh.elm.tag1 == 2) | (head_mesh.elm.tag1 == 1) | (
+            head_mesh.elm.tag1 == 3)
+        mesh_mask = torch.from_numpy(mask_123).to(device)
 
     mesh_vols = torch.from_numpy(
         head_mesh.elements_volumes_and_areas()[:]

@@ -322,8 +322,8 @@ class OptTI:
         if save_TI_mesh:
             mesh.elm.nr
             mesh.add_element_field(amp_TI, 'TI')
-            # mesh.elmdata = [ed for ed in mesh.elmdata if ed.field_name == 'TI']
-            mesh.crop_mesh(2)
+            mesh.elmdata = [ed for ed in mesh.elmdata if ed.field_name == 'TI']
+            mesh = mesh.crop_mesh([1, 2, 3])
             mesh.write(mesh_path)
             print(f'TI mesh saved to {mesh_path}.')
             create_masks = False
@@ -344,7 +344,7 @@ class OptTI:
         ep2: Tuple[str, str],
         coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
         rs: Union[List[float], float],
-        just_gray_matter: bool = True,
+        just_gray_matter: bool = False,
     ):
         # read reference mesh
         res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
@@ -387,7 +387,8 @@ class OptTI:
                       coords: Union[Tuple[float, float, float],
                                     List[Tuple[float, float, float]]],
                       rs: Union[List[float], float],
-                      total: int = 100
+                      total: int = 100,
+                      just_gray_matter: bool = False,
                       ):
         ep_groups = []
         focalities = []
@@ -409,7 +410,9 @@ class OptTI:
 
             # focalities
             focality = self.get_TI_focality(
-                ep1, ep2, coords, rs)
+                ep1, ep2, coords, rs,
+                just_gray_matter=just_gray_matter,
+            )
 
             focalities.append(focality)
             ep_groups.append(ep_group)
