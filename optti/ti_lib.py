@@ -425,13 +425,15 @@ def compute_BE_TI_from_tDCS_sims(subject_dir: Path,
 
 
 
-
 def compute_TI_focality(
+    subject_dir: Path,
     elm_centers: torch.Tensor,
     max_ti_magn: torch.Tensor,
-    coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
+    mni_coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
     rs: Union[List[float], float],
-    )-> Tuple[float, Tuple[Tuple[float, float], Tuple[float, float]]]:
+    mesh_vols: torch.Tensor = None,
+    mesh_mask: torch.Tensor = None,
+    )-> float:
     """
     Computes the focality of TI values for a given set of coordinates and radii.
     # TODO Maybe we need to take volume into account too.
@@ -441,63 +443,63 @@ def compute_TI_focality(
             the coordinates of the elements.
         max_ti_magn (torch.Tensor): A tensor of shape (n_elms,) representing the
             maximum TI magnitude for each element.
-        coords (Union[Tuple[float, float, float],
+        mni_coords (Union[Tuple[float, float, float],
             List[Tuple[float, float, float]]]): A tuple or list of tuples
             representing the coordinates of the spots.
         rs (Union[List[float], float]): A float or list of floats representing
             the radii of the spots.
 
     Returns:
-        Tuple[float, Tuple[Tuple[float, float], Tuple[float, float]]]: A tuple
-            containing the focality value and a tuple of tuples representing
-            the mean and standard deviation of the focal and non-focal TI
-            magnitudes.
-
-    Example:
-        >>> elm_centers = torch.tensor([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6],
-            [0.7, 0.8, 0.9]])
-        >>> max_ti_magn = torch.tensor([1.0, 2.0, 3.0])
-        >>> coords = [(0.1, 0.2, 0.3), (0.4, 0.5, 0.6)]
-        >>> rs = [0.1, 0.2]
-        >>> compute_TI_focality(elm_centers, max_ti_magn, coords, rs)
-        (1.5, ((2.0, 0.5), (1.0, 0.0)))
+        float: Focality
     """
-    if isinstance(coords, tuple):
-        coords = [coords]
+    if isinstance(mni_coords, tuple):
+        mni_coords = [mni_coords]
 
     if isinstance(rs, (float, int)):
-        rs = [float(rs)] * len(coords)
-    assert len(coords) == len(rs), 'The number of coordinates and radii \
+        rs = [float(rs)] * len(mni_coords)
+    assert len(mni_coords) == len(rs), 'The number of coordinates and radii \
         must be the same'
-    for coord, r in zip(coords, rs):
+    for idx, (coord, r) in enumerate(zip(mni_coords, rs)):
+        subj_coords = simnibs.mni2subject_coords(coord, str(subject_dir))
+        mni_coords[idx] = (subj_coords[0], subj_coords[1], subj_coords[2])
+
         assert len(coord) == 3, 'Each coordinate must have 3 values'
         assert r > 0, 'The radius must be positive'
 
-
-    coords = torch.tensor(coords).double().to(max_ti_magn.device)
+    mni_coords = torch.tensor(mni_coords).double().to(max_ti_magn.device)
     rs = torch.tensor(rs).double().to(max_ti_magn.device)
 
-
-    dis2spots = torch.cdist(elm_centers, coords)
+    dis2spots = torch.cdist(elm_centers, mni_coords)
     coord_cond = dis2spots < rs # of shape  (n_elms, n_spots)
     found = coord_cond.any(dim=0).all()
     if found.float() != 1:
         raise ValueError('There are some spots that are \
             not covered by any element. Found ones: {found}')
 
-    coord_mask = coord_cond.any(dim=1).float() # of shape (n_elms,)
+    coord_mask = coord_cond.any(dim=1) # .float() # of shape (n_elms,)
+    if mesh_mask is not None:
+        coord_mask = torch.logical_and(coord_mask, mesh_mask)
 
-    focal_coords = torch.where(coord_mask ==1)
-    nonfocal_coords = torch.where(coord_mask ==0)
+
+    focal_coords = torch.where(coord_mask == torch.tensor(True))
+    nonfocal_coords = torch.where(coord_mask ==torch.tensor(False))
     focal_magn = max_ti_magn[focal_coords]
     nonfocal_magn = max_ti_magn[nonfocal_coords]
-    focality = focal_magn.mean() / nonfocal_magn.mean()
+    if mesh_vols is not None:
+        focal_vol = mesh_vols[focal_coords].sum()
+        focal_magn = (focal_magn * mesh_vols[focal_coords]).sum() / focal_vol
 
-    return focality.item(), (
-        (focal_magn.mean().item(), focal_magn.std().item()),
-        (nonfocal_magn.mean().item(), nonfocal_magn.std().item()),
-    )
+        nonfocal_vol = mesh_vols[nonfocal_coords].sum()
+        nonfocal_magn = (nonfocal_magn * mesh_vols[nonfocal_coords]).sum() / nonfocal_vol
+        # mesh_weights = mesh_vols / mesh_vols.sum()
+        pass
+    else:
+        focal_magn = focal_magn.mean()
+        nonfocal_magn = nonfocal_magn.mean()
 
+    focality = focal_magn/ nonfocal_magn
+
+    return focality.item()
 
 
 
@@ -538,8 +540,28 @@ def analyze_TI_from_sims(
         **kwargs,
     )
 
-    focality, focality_info = compute_TI_focality(
+    focality = compute_TI_focality(
+        subject_folder,
         elm_centers, ti_magn,
         coords, rs)
-
+    focality_info = None
     return focality, focality_info, elm_centers, ti_magn
+
+
+def res2mask_and_vol(res_tensors: Path, device: str, just_gray_matter: bool):
+    res_ref = torch.load(res_tensors)
+    res_ref['elm_centers'] = res_ref['elm_centers'].to(device)
+
+    head_mesh = simnibs.read_msh(find_msh(res_tensors.parent))
+    head_mesh = head_mesh.crop_mesh(tags_needed)
+    if just_gray_matter:
+        mesh_mask = torch.from_numpy(
+            head_mesh.elm.tag1 == 2
+        ).to(device)
+    else:
+        mesh_mask = torch.ones(head_mesh.elm.nr).bool().to(device)
+
+    mesh_vols = torch.from_numpy(
+        head_mesh.elements_volumes_and_areas()[:]
+    ).to(device)
+    return res_ref, mesh_mask, mesh_vols

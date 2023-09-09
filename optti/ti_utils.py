@@ -21,7 +21,7 @@ tags_needed = [
 def find_msh(dir: Path) -> Path:
     mshf = None
     for f in dir.glob("*.msh"):
-        print(f'Found msh file: {f}')
+        # print(f'Found msh file: {f}')
         mshf = f
         break
     if mshf is None:

@@ -1,16 +1,25 @@
-import json
+import copy
 import multiprocessing as omp
-from itertools import combinations, permutations
-from pathlib import Path
-import torch
-from typing import List, Tuple, Union
-from tqdm import tqdm
-# import pathos.multiprocessing as mp
-
-from .ti_lib import run_tDCS_sim, compute_TI_max_magnitude, compute_TI_focality
-from .ti_utils import read_eeg_locations, align_mesh_idx, find_msh, tags_needed
+import random
 import time
+from itertools import permutations
+from pathlib import Path
+from typing import List, Tuple, Union
+
+import numpy as np
 import simnibs
+import torch
+from simnibs import transformations
+from tqdm import tqdm
+
+# import pathos.multiprocessing as mp
+from .ti_lib import (
+    compute_TI_focality,
+    compute_TI_max_magnitude,
+    res2mask_and_vol,
+    run_tDCS_sim,
+)
+from .ti_utils import align_mesh_idx, find_msh, read_eeg_locations, tags_needed
 
 
 def run_sim_worker(a_args):
@@ -143,15 +152,14 @@ class OptTI:
         self.current = current
         self.just_gray_matter = just_gray_matter
 
+        self._focality_cache = dict()
+
     def pre_calculate(self, cores: int = -1):
         """Calculate all necessary data for the optimization.
         """
         self.summary_f = self.pre_calculation_dir / \
             f'summary-{self.electrode_shape}-{self.electrode_dimensions}\
 -{self.electrode_thickness}.json'
-        print(self.electrode_base_pairs)
-        print(len(self.electrode_base_pairs))
-        pass
         if cores == -1:
             # by default use all physical cores
             cores = omp.cpu_count()
@@ -164,10 +172,6 @@ class OptTI:
                                 self.just_gray_matter,
                                 self.electrode_base_pairs,
                                 cores)
-        print(self.electrode_pairs)
-        # json.dump({
-        #     'sims_res': sims_res
-        # }, open(self.summary_f, 'w'), indent=2)
 
     @staticmethod
     def sim_dir_fn_gen(pre_cal_dir: Path, e1, e2, c, e_shape,
@@ -230,7 +234,6 @@ class OptTI:
         return res, res_tensors
 
     def read_tDCS(self, e1: str, e2: str):
-        print(e1, e2)
         assert e1 in self.electrodes and e2 in self.electrodes
         if e1 == self.electrode_ref:
             # we can directly get the result
@@ -295,7 +298,8 @@ class OptTI:
         ep2: Tuple[str, str],
         save_TI_mesh: bool = False,
         mesh_path: str = './TI.msh',
-        return_msh: bool = False
+        nii_path: str = './TI',
+        return_mesh: bool = False
     ):
         # read reference mesh
         res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
@@ -305,8 +309,8 @@ class OptTI:
                                       self.electrode_shape,
                                       self.electrode_dimensions,
                                       self.electrode_thickness)
-        head_mesh = simnibs.read_msh(find_msh(res_dir))
-        head_mesh = head_mesh.crop_mesh(tags_needed)
+        mesh = simnibs.read_msh(find_msh(res_dir))
+        mesh = mesh.crop_mesh(tags_needed)
 
         tDCS_res_1 = self.read_tDCS(ep1[0], ep1[1])
         tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
@@ -316,13 +320,21 @@ class OptTI:
         ).cpu().numpy()
 
         if save_TI_mesh:
-            head_mesh.elm.nr
-            head_mesh.add_element_field(amp_TI, 'TI')
-            head_mesh.write(mesh_path)
+            mesh.elm.nr
+            mesh.add_element_field(amp_TI, 'TI')
+            # mesh.elmdata = [ed for ed in mesh.elmdata if ed.field_name == 'TI']
+            mesh.crop_mesh(2)
+            mesh.write(mesh_path)
             print(f'TI mesh saved to {mesh_path}.')
+            create_masks = False
+            create_label = False
+            transformations.interpolate_to_volume(
+                mesh_path, self.model_dir, nii_path,
+                create_masks=create_masks,
+                create_label=create_label)
 
-        if return_msh:
-            return amp_TI, head_mesh
+        if return_mesh:
+            return amp_TI, mesh
         else:
             return amp_TI
 
@@ -331,7 +343,8 @@ class OptTI:
         ep1: Tuple[str, str],
         ep2: Tuple[str, str],
         coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
-        rs: Union[List[float], float]
+        rs: Union[List[float], float],
+        just_gray_matter: bool = True,
     ):
         # read reference mesh
         res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
@@ -343,11 +356,14 @@ class OptTI:
                                       self.electrode_thickness)
         res_tensors = res_dir / 'vecE.pt'
         assert res_tensors.is_file()
-        res_ref = torch.load(res_tensors)
-        res_ref['elm_centers'] = res_ref['elm_centers'].to(self.device)
 
-        head_mesh = simnibs.read_msh(find_msh(res_dir))
-        head_mesh = head_mesh.crop_mesh(tags_needed)
+        if len(self._focality_cache) == 0:
+            res_ref, mesh_mask, mesh_vols = res2mask_and_vol(
+                res_tensors, self.device, just_gray_matter)
+
+            self._focality_cache['mesh_vols'] = mesh_vols
+            self._focality_cache['mesh_mask'] = mesh_mask
+            self._focality_cache['res_ref'] = res_ref
 
         tDCS_res_1 = self.read_tDCS(ep1[0], ep1[1])
         tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
@@ -356,17 +372,65 @@ class OptTI:
             tDCS_res_1['vecE'].float(), tDCS_res_2['vecE'].float(),
             tof16=False,
         )
-        focality, focality_info = compute_TI_focality(
-            res_ref['elm_centers'].double(),
+        focality = compute_TI_focality(
+            self.model_dir,
+            self._focality_cache['res_ref']['elm_centers'].double().clone(),
             amp_TI,
             coords,
             rs,
+            mesh_vols=self._focality_cache['mesh_mask'].clone(),
+            mesh_mask=self._focality_cache['mesh_mask'].clone(),
         )
-        return focality, focality_info
+        return focality
 
-    def run(self):
-        # optimize part
-        pass
+    def random_search(self,
+                      coords: Union[Tuple[float, float, float],
+                                    List[Tuple[float, float, float]]],
+                      rs: Union[List[float], float],
+                      total: int = 100
+                      ):
+        ep_groups = []
+        focalities = []
+        for i in range(total):
+            t0 = time.time()
+            found_ep_groups = False
+            while not found_ep_groups:
+                ep1 = random.choice(self.electrode_pairs)
+                found_ep2 = False
+                while not found_ep2:
+                    other_electrodes = copy.deepcopy(self.electrode_pairs)
+                    ep2 = random.choice(other_electrodes)
+
+                    if len(set(ep2) & set(ep1)) == 0:
+                        found_ep2 = True
+                ep_group = {ep1, ep2}
+                if ep_group not in ep_groups:
+                    found_ep_groups = True
+
+            # focalities
+            focality = self.get_TI_focality(
+                ep1, ep2, coords, rs)
+
+            focalities.append(focality)
+            ep_groups.append(ep_group)
+
+            assert len(ep_groups) == len(focalities)
+
+            _focalities_arr = np.array(focalities)
+            best_fc = np.max(_focalities_arr)
+            mean_fc = np.mean(_focalities_arr)
+            dt = time.time() - t0
+            print(
+                f'Iter {i+1}/{total} ({dt:.1f}s), best: {best_fc:.3f}, '
+                f'mean: {mean_fc:.3f}, '
+                f'generated by {ep_groups[np.argmax(_focalities_arr)]}.'
+            )
+            torch.save({
+                'focalities': focalities,
+                'ep_groups': ep_groups,
+            }, 'local.res-random_search.pt')
+
+        return focalities, ep_groups
 
 
 def test_optti():
