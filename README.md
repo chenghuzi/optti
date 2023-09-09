@@ -2,56 +2,52 @@
 
 ## Installation
 
-Install simnibs (https://simnibs.github.io/simnibs/build/html/index.html) either using installer or pip
+1. Ensure you have python 3.9.x installed and activated, which is the version officially supported by simnibs.
+2. Clone this repository.
+3. Navigate to the repository and install `optti` using `pip install .`.
+4. Begin using optti.
 
-```bash
-# Notice that you need to install the correct version of simnibs for your python version
-pip install https://github.com/simnibs/simnibs/releases/download/v4.0.0/simnibs-4.0.0-cp39-cp39-win_amd64.whl
-```
-
-**Activate the simnibs environment (optional)**
-If you install simnibs using installer, you need to activate the simnibs environment
-
-```bash
-conda activate /path/to//SimNIBS/simnibs_env
-```
-
-Install optti
-
-```bash
-pip install optti
-
-```
+You can also install simnibs (https://simnibs.github.io/simnibs/build/html/index.html) using their installer. However, you need to activate the simnibs environment before installing optti.
 
 ## Usage
 
-Run pre-calculations
+**Initialization:**
 
 ```python
 import optti
 
-model = 'ernie'
-sim_res_dir = 'path/to/simnibs/results/folder'
-opt = optti.OptTI(model, sim_res_dir)
+model_dir = 'path/to/simnibs/subject/folder'
+current = 0.001 # in A
+pre_calculation_dir = 'path/to/all/pre-calculated/simulations'
+eeg_coord_sys = '10-10' # EEG system
 
-opt.pre_calculate()
+# Initialize an optimization project:
+opt = optti.OptTI(model_dir, pre_calculation_dir, eeg_coord_sys=eeg_coord_sys, current=current) 
+
+# Before running TI optimization, pre-calculate all the tDCS simulations N-1 times, where N is the number of electrodes.
+opt.pre_calculate(cores=8)
+
+# Align mesh files from the pre-calculated simulations so they all share the same identical point coordinates.
+opt.align_mesh()
 ```
 
-
-Run simulation pruning to reduce the storage size (optional)
+**Compute TI density**
 
 ```python
-opt.prune_storage()
+opt.get_TI_density(('AF7', 'O1'),('F8', 'PO8'), save_TI_mesh=True)
 ```
 
-Simulate a specific electrode configuration
+**Compute TI focality**
 
 ```python
-opt.simulate(e1, e2, geometry, current)
+opt.get_TI_focality(
+    ('AF7', 'O1'),
+    ('F8', 'PO8'),
+    (0.7879,  21.1037, -22.0770), # target center, we also support using a list of coordinates for multi-target focality
+    2, # target radius, we also support using a list of radius for multi-target focality.
+    )
 ```
 
-Run optimization
+**Discrete Optimization**
 
-```python
-opt.run((x,y, z), r, current)
-```
+Under construction

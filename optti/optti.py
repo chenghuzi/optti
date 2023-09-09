@@ -3,13 +3,14 @@ import multiprocessing as omp
 from itertools import combinations, permutations
 from pathlib import Path
 import torch
-from typing import Tuple
+from typing import List, Tuple, Union
 from tqdm import tqdm
 # import pathos.multiprocessing as mp
 
-from .ti_lib import run_tDCS_sim
-from .ti_utils import read_eeg_locations, align_mesh_idx
+from .ti_lib import run_tDCS_sim, compute_TI_max_magnitude, compute_TI_focality
+from .ti_utils import read_eeg_locations, align_mesh_idx, find_msh, tags_needed
 import time
+import simnibs
 
 
 def run_sim_worker(a_args):
@@ -228,7 +229,7 @@ class OptTI:
         res = torch.load(res_tensors)
         return res, res_tensors
 
-    def read_sim(self, e1: str, e2: str):
+    def read_tDCS(self, e1: str, e2: str):
         print(e1, e2)
         assert e1 in self.electrodes and e2 in self.electrodes
         if e1 == self.electrode_ref:
@@ -255,22 +256,22 @@ class OptTI:
             e_ref = self.electrode_ref
             ep_base_1 = (e_ref, e1)
             ep_base_2 = (e_ref, e2)
-            res_ep1 = self.read_sim(ep_base_1[0], ep_base_1[1])
+            res_ep1 = self.read_tDCS(ep_base_1[0], ep_base_1[1])
             res_ep1['elm_centers'] = res_ep1['elm_centers'].to(self.device)
             res_ep1['vecE'] = res_ep1['vecE'].to(self.device)
             res_ep1['magnE'] = res_ep1['magnE'].to(self.device)
 
-            res_ep2 = self.read_sim(ep_base_2[0], ep_base_2[1])
-            new_indices_ep2, _distances_ep2 = align_mesh_idx(
-                res_ep1['elm_centers'], res_ep2['elm_centers'],
-                self.device,
-                block_size=20,
-                dist_threshold=2,
-                verbose=True,
-            )
+            res_ep2 = self.read_tDCS(ep_base_2[0], ep_base_2[1])
             if 'aligned' in res_ep2 and res_ep2['aligned']:
                 aligned = True
             else:
+                new_indices_ep2, _distances_ep2 = align_mesh_idx(
+                    res_ep1['elm_centers'], res_ep2['elm_centers'],
+                    self.device,
+                    block_size=20,
+                    dist_threshold=2,
+                    verbose=True,
+                )
                 res_ep2['elm_centers'] = res_ep2['elm_centers'].to(self.device)[
                     new_indices_ep2]
                 res_ep2['vecE'] = res_ep2['vecE'].to(self.device)[
@@ -288,7 +289,83 @@ class OptTI:
                 'aligned': aligned,
             }
 
+    def get_TI_density(
+        self,
+        ep1: Tuple[str, str],
+        ep2: Tuple[str, str],
+        save_TI_mesh: bool = False,
+        mesh_path: str = './TI.msh',
+        return_msh: bool = False
+    ):
+        # read reference mesh
+        res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
+                                      self.electrode_base_pairs[0][0],
+                                      self.electrode_base_pairs[0][1],
+                                      self.current,
+                                      self.electrode_shape,
+                                      self.electrode_dimensions,
+                                      self.electrode_thickness)
+        head_mesh = simnibs.read_msh(find_msh(res_dir))
+        head_mesh = head_mesh.crop_mesh(tags_needed)
+
+        tDCS_res_1 = self.read_tDCS(ep1[0], ep1[1])
+        tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
+
+        amp_TI = compute_TI_max_magnitude(
+            tDCS_res_1['vecE'].float(), tDCS_res_2['vecE'].float()
+        ).cpu().numpy()
+
+        if save_TI_mesh:
+            head_mesh.elm.nr
+            head_mesh.add_element_field(amp_TI, 'TI')
+            head_mesh.write(mesh_path)
+            print(f'TI mesh saved to {mesh_path}.')
+
+        if return_msh:
+            return amp_TI, head_mesh
+        else:
+            return amp_TI
+
+    def get_TI_focality(
+        self,
+        ep1: Tuple[str, str],
+        ep2: Tuple[str, str],
+        coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
+        rs: Union[List[float], float]
+    ):
+        # read reference mesh
+        res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
+                                      self.electrode_base_pairs[0][0],
+                                      self.electrode_base_pairs[0][1],
+                                      self.current,
+                                      self.electrode_shape,
+                                      self.electrode_dimensions,
+                                      self.electrode_thickness)
+        res_tensors = res_dir / 'vecE.pt'
+        assert res_tensors.is_file()
+        res_ref = torch.load(res_tensors)
+        res_ref['elm_centers'] = res_ref['elm_centers'].to(self.device)
+
+        head_mesh = simnibs.read_msh(find_msh(res_dir))
+        head_mesh = head_mesh.crop_mesh(tags_needed)
+
+        tDCS_res_1 = self.read_tDCS(ep1[0], ep1[1])
+        tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
+
+        amp_TI = compute_TI_max_magnitude(
+            tDCS_res_1['vecE'].float(), tDCS_res_2['vecE'].float(),
+            tof16=False,
+        )
+        focality, focality_info = compute_TI_focality(
+            res_ref['elm_centers'].double(),
+            amp_TI,
+            coords,
+            rs,
+        )
+        return focality, focality_info
+
     def run(self):
+        # optimize part
         pass
 
 
@@ -300,5 +377,5 @@ def test_optti():
 
 
 if __name__ == '__main__':
-    test_optti()
+    # test_optti()
     pass

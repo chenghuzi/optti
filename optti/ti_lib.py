@@ -9,7 +9,7 @@ import simnibs
 import torch
 from simnibs import sim_struct
 
-from .ti_utils import align_mesh_idx, find_msh
+from .ti_utils import align_mesh_idx, find_msh, tags_needed
 
 
 def post_process_tDCS_sim(output_dir: Path,
@@ -22,17 +22,6 @@ def post_process_tDCS_sim(output_dir: Path,
     msh_f = output_dir / 'ernie_TDCS_1_scalar.msh'
     head_mesh = simnibs.read_msh(msh_f)
     # Here we only care about volumes
-    tags_needed = [
-        1,  # WM
-        2,  # GM
-        3,  # CSF
-        5,  # Scalp
-        6,  # Eye_balls,
-        7,  # Compact_bone
-        8,  # Spongy_bone
-        9,  # Blood
-        10,  # Muscle
-    ]
     head_mesh = head_mesh.crop_mesh(tags_needed)
     if just_gray_matter:
         head_mesh = head_mesh.crop_mesh(2)
@@ -307,14 +296,16 @@ def compute_TI_max_magnitude(
 
     # this is the amplitude when |E1| cos alpha <= |E2|
     tmp_amp = torch.cross(vecE_2, vec_diffE, dim=1).norm(
-        dim=1) / vec_diffE.norm(dim=1)
+        dim=1) / (vec_diffE.norm(dim=1) +eps)
 
     cosine_alpha = torch.abs((vecE_base * vecE_2).sum(dim=1) / (
-        vecE_base.norm(dim=1) * vecE_2.norm(dim=1)
+        vecE_base.norm(dim=1) * vecE_2.norm(dim=1) +eps
     ))
     # this is the condition when |E1| cos alpha > |E2|
     angle_mask = (magnE_base * cosine_alpha > magnE_2).float()
 
+    assert torch.isnan(tmp_amp).any() == torch.tensor(False)
+    assert torch.isnan(magnE_2).any() == torch.tensor(False)
     amplitude = 2 * (angle_mask * magnE_2 + (1 - angle_mask) * tmp_amp)
     if tof16:
         return amplitude.half()

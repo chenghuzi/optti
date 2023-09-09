@@ -5,6 +5,18 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+tags_needed = [
+    1,  # WM
+    2,  # GM
+    3,  # CSF
+    5,  # Scalp
+    6,  # Eye_balls,
+    7,  # Compact_bone
+    8,  # Spongy_bone
+    9,  # Blood
+    10,  # Muscle
+]
+
 
 def find_msh(dir: Path) -> Path:
     mshf = None
