@@ -141,7 +141,8 @@ def align_mesh_idx(
 
 
 def read_eeg_locations(
-    eeg_locations_file: Path = Path('params/EEG10-10_UI_Jurak_2007.csv')
+    eeg_locations_file: Path = Path('params/EEG10-10_UI_Jurak_2007.csv'),
+    return_ndarray: bool = False,
 ) -> Dict[str, List[float]]:
     """Read the EEG locations from the file
 
@@ -157,5 +158,7 @@ def read_eeg_locations(
     for line in eeg_locations:
         x, y, z, name = line.strip().split(',')[1:]
         eeg_info[name] = [float(x), float(y), float(z)]
+        if return_ndarray:
+            eeg_info[name] = np.array(eeg_info[name])
 
     return eeg_info

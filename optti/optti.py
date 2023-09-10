@@ -2,7 +2,7 @@ import copy
 import multiprocessing as omp
 import random
 import time
-from itertools import permutations
+from itertools import permutations, combinations
 from pathlib import Path
 from typing import List, Tuple, Union
 
@@ -10,7 +10,7 @@ import numpy as np
 import simnibs
 import torch
 from simnibs import transformations
-from tqdm import tqdm
+from tqdm import tqdm, trange
 
 # import pathos.multiprocessing as mp
 from .ti_lib import (
@@ -20,6 +20,26 @@ from .ti_lib import (
     run_tDCS_sim,
 )
 from .ti_utils import align_mesh_idx, find_msh, read_eeg_locations, tags_needed
+
+
+def dis_bet_eps(ep1, ep2, eeg_coord_info):
+    p1_c = eeg_coord_info[ep1[0]]
+    p1_a = eeg_coord_info[ep1[1]]
+    p2_c = eeg_coord_info[ep2[0]]
+    p2_a = eeg_coord_info[ep2[1]]
+
+    dis = np.linalg.norm(p1_c - p2_c) + np.linalg.norm(p1_a - p2_a)
+    return dis
+
+
+def dis_bet_ep_grps(ep_grp1, ep_grp2, eeg_coord_info):
+    (ep1_1, ep1_2) = ep_grp1
+    (ep2_1, ep2_2) = ep_grp2
+    dis_1 = dis_bet_eps(ep1_1, ep2_1, eeg_coord_info) + \
+        dis_bet_eps(ep1_2, ep2_2, eeg_coord_info)
+    dis_2 = dis_bet_eps(ep1_1, ep2_2, eeg_coord_info) + \
+        dis_bet_eps(ep1_2, ep2_1, eeg_coord_info)
+    return min(dis_1, dis_2)
 
 
 def run_sim_worker(a_args):
@@ -133,7 +153,7 @@ class OptTI:
         self.pre_calculation_dir.mkdir(exist_ok=True, parents=True)
 
         if eeg_coord_sys == '10-10':
-            self.eeg_coord_info = read_eeg_locations()
+            self.eeg_coord_info = read_eeg_locations(return_ndarray=True)
         else:
             raise NotImplementedError(
                 'Only 10-10 is supported at the moment.')
@@ -378,7 +398,7 @@ class OptTI:
             amp_TI,
             coords,
             rs,
-            mesh_vols=self._focality_cache['mesh_mask'].clone(),
+            mesh_vols=self._focality_cache['mesh_vols'].clone(),
             mesh_mask=self._focality_cache['mesh_mask'].clone(),
         )
         return focality

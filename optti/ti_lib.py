@@ -477,24 +477,26 @@ def compute_TI_focality(
             not covered by any element. Found ones: {found}')
 
     coord_mask = coord_cond.any(dim=1) # .float() # of shape (n_elms,)
+    noncoord_mask = torch.logical_not(coord_mask)
     if mesh_mask is not None:
         coord_mask = torch.logical_and(coord_mask, mesh_mask)
-
     focal_coords = torch.where(coord_mask == torch.tensor(True))
 
     # this actually considers many other elements other than the GM and WM
-    nonfocal_coords = torch.where(coord_mask == torch.tensor(False)) 
+    nonfocal_coords = torch.where(
+        torch.logical_and(noncoord_mask, mesh_mask) == torch.tensor(True)
+        ) 
     focal_magn = max_ti_magn[focal_coords]
     nonfocal_magn = max_ti_magn[nonfocal_coords]
     if mesh_vols is not None:
-        # method 1
-        focal_vol = mesh_vols[focal_coords].sum() # total volume
-        focal_magn = (focal_magn * mesh_vols[focal_coords]).sum() # total magnitude
+        # # method 1
+        # focal_vol = mesh_vols[focal_coords].sum() # total volume
+        # focal_magn = (focal_magn * mesh_vols[focal_coords]).sum() # total magnitude
 
-        focal_magn = focal_magn / focal_vol # average density
+        # focal_magn = focal_magn / focal_vol # average density
 
-        nonfocal_vol = mesh_vols[nonfocal_coords].sum()
-        nonfocal_magn = (nonfocal_magn * mesh_vols[nonfocal_coords]).sum() / nonfocal_vol
+        # nonfocal_vol = mesh_vols[nonfocal_coords].sum()
+        # nonfocal_magn = (nonfocal_magn * mesh_vols[nonfocal_coords]).sum() / nonfocal_vol
 
         # # method 2
         # eps = 1e-16
@@ -504,6 +506,24 @@ def compute_TI_focality(
         # nonfocal_magn = nonfocal_magn / (mesh_vols[nonfocal_coords] + eps)
         # nonfocal_magn = nonfocal_magn.mean()
         # mesh_weights = mesh_vols / mesh_vols.sum()
+
+        # # method 3
+        focal_magn = focal_magn.mean()
+        nonfocal_magn = nonfocal_magn.max()
+
+        # # method 4
+        # focal_vol = mesh_vols[focal_coords]
+        # focal_vol = focal_vol / focal_vol.sum()
+        # focal_magn = (focal_magn * mesh_vols[focal_coords]).sum() # average magnitude
+        # # focal_magn = focal_magn.mean()
+
+        # # focal_magn = focal_magn / focal_vol # average density
+        # # import ipdb; ipdb.set_trace() # fmt: off
+        # # nonfocal_vol = mesh_vols[nonfocal_coords]
+        # # nonfocal_vol = nonfocal_vol / nonfocal_vol.sum()
+        # # nonfocal_magn = (nonfocal_magn * mesh_vols[nonfocal_coords]).sum()
+        # nonfocal_magn = nonfocal_magn.max()
+
         pass
     else:
         focal_magn = focal_magn.mean()
