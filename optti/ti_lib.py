@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import simnibs
 import torch
-from simnibs import sim_struct
+from simnibs import sim_struct, transformations
 
 from .ti_utils import align_mesh_idx, find_msh, tags_needed
 
@@ -461,6 +461,7 @@ def compute_TI_focality(
         must be the same'
     for idx, (coord, r) in enumerate(zip(mni_coords, rs)):
         subj_coords = simnibs.mni2subject_coords(coord, str(subject_dir))
+        # import ipdb; ipdb.set_trace() # fmt: off
         mni_coords[idx] = (subj_coords[0], subj_coords[1], subj_coords[2])
 
         assert len(coord) == 3, 'Each coordinate must have 3 values'
@@ -593,11 +594,32 @@ def res2mask_and_vol(res_tensors: Path, device: str, just_gray_matter: bool):
     else:
         # mesh_mask = torch.ones(head_mesh.elm.nr).bool().to(device)
         # import ipdb; ipdb.set_trace() # fmt: off
-        mask_123 = (head_mesh.elm.tag1 == 2) | (head_mesh.elm.tag1 == 1) | (
-            head_mesh.elm.tag1 == 3)
+        mask_123 = (head_mesh.elm.tag1 == 2) | \
+            (head_mesh.elm.tag1 == 1) | \
+            (head_mesh.elm.tag1 == 3)
         mesh_mask = torch.from_numpy(mask_123).to(device)
 
     mesh_vols = torch.from_numpy(
         head_mesh.elements_volumes_and_areas()[:]
     ).to(device)
     return res_ref, mesh_mask, mesh_vols
+
+
+def save_msh2mni(model_dir, mesh, amp_TI, mesh_path, nii_path, crop=True, to_mni=True):
+    mesh.add_element_field(amp_TI, 'TI')
+    mesh.elmdata = [ed for ed in mesh.elmdata if ed.field_name == 'TI']
+    if crop:
+        mesh = mesh.crop_mesh([1, 2, 3])
+    mesh.write(mesh_path)
+    print(f'TI mesh saved to {mesh_path}.')
+
+    if to_mni:
+        transformations.warp_volume(
+            mesh_path, model_dir, nii_path,
+            transformation_direction='subject2mni',
+            transformation_type='nonl',
+            )
+    else:
+        mni_mesh_path = mesh_path.split('.')[0] + '-mni'
+        transformations.interpolate_to_volume(
+            mni_mesh_path, model_dir, nii_path)

@@ -9,7 +9,6 @@ from typing import List, Tuple, Union
 import numpy as np
 import simnibs
 import torch
-from simnibs import transformations
 from tqdm import tqdm, trange
 
 # import pathos.multiprocessing as mp
@@ -18,6 +17,7 @@ from .ti_lib import (
     compute_TI_max_magnitude,
     res2mask_and_vol,
     run_tDCS_sim,
+    save_msh2mni
 )
 from .ti_utils import align_mesh_idx, find_msh, read_eeg_locations, tags_needed
 
@@ -184,14 +184,14 @@ class OptTI:
             # by default use all physical cores
             cores = omp.cpu_count()
 
-        sims_res = run_all_sims(self.model_dir, self.pre_calculation_dir,
-                                self.current,
-                                self.electrode_shape,
-                                self.electrode_dimensions,
-                                self.electrode_thickness,
-                                self.just_gray_matter,
-                                self.electrode_base_pairs,
-                                cores)
+        run_all_sims(self.model_dir, self.pre_calculation_dir,
+                     self.current,
+                     self.electrode_shape,
+                     self.electrode_dimensions,
+                     self.electrode_thickness,
+                     self.just_gray_matter,
+                     self.electrode_base_pairs,
+                     cores)
 
     @staticmethod
     def sim_dir_fn_gen(pre_cal_dir: Path, e1, e2, c, e_shape,
@@ -340,18 +340,13 @@ class OptTI:
         ).cpu().numpy()
 
         if save_TI_mesh:
-            mesh.elm.nr
-            mesh.add_element_field(amp_TI, 'TI')
-            mesh.elmdata = [ed for ed in mesh.elmdata if ed.field_name == 'TI']
-            mesh = mesh.crop_mesh([1, 2, 3])
-            mesh.write(mesh_path)
-            print(f'TI mesh saved to {mesh_path}.')
-            create_masks = False
-            create_label = False
-            transformations.interpolate_to_volume(
-                mesh_path, self.model_dir, nii_path,
-                create_masks=create_masks,
-                create_label=create_label)
+            save_msh2mni(
+                self.model_dir,
+                mesh,
+                amp_TI,
+                mesh_path,
+                nii_path,
+            )
 
         if return_mesh:
             return amp_TI, mesh
@@ -454,6 +449,38 @@ class OptTI:
             }, 'local.res-random_search.pt')
 
         return focalities, ep_groups
+
+    def prob_greedy_search(self,
+                           coords: Union[Tuple[float, float, float],
+                                         List[Tuple[float, float, float]]],
+                           rs: Union[List[float], float],
+                           total: int = 100,
+                           just_gray_matter: bool = False,
+                           ):
+
+        self.eeg_coord_info
+        ep_grp_idx = np.random.choice(
+            len(self.electrode_pairs), 2, replace=False)
+        ep_grps_all = list(combinations(self.electrode_pairs, 2))
+        dis_all = []
+        for idx in trange(1, len(ep_grps_all) - 1):
+            dis_all.append(dis_bet_ep_grps(
+                ep_grps_all[idx - 1], ep_grps_all[idx],
+                self.eeg_coord_info)
+            )
+        # dis_bet_ep_grps(
+        #     ep_grps_all[0], ep_grps_all[1],
+        #     self.eeg_coord_info
+        # )
+        # import ipdb; ipdb.set_trace() # fmt: off
+
+
+        # ep_grp = {self.electrode_pairs[ep_grp_idx[0]],
+        #           self.electrode_pairs[ep_grp_idx[1]]}
+        # ep1 = random.choice(self.electrode_pairs)
+        pass
+
+
 
 
 def test_optti():
