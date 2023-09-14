@@ -8,6 +8,7 @@ import numpy as np
 import simnibs
 import torch
 from simnibs import sim_struct, transformations
+from tqdm import tqdm
 
 from .ti_utils import align_mesh_idx, find_msh, tags_needed
 
@@ -312,57 +313,93 @@ def compute_TI_max_magnitude(
     else:
         return amplitude
 
+def cartesian2sphere(x:torch.Tensor)->torch.Tensor:
+    return torch.stack(
+        (x.norm(dim=-1),
+         torch.acos(x[..., 2] / x.norm(dim=-1)),
+         torch.atan2(x[..., 1], x[..., 0])),
+        dim=-1)
 
-def compute_BE_TI_from_tDCS_sims_int(subject_dir: Path,
-                                     output_dir_1: Path,
-                                     output_dir_2: Path,
-                                     integer_size: int = 1,
-                                     plot_alignment: bool = False,
-                                     ):
-    """Compute the bi-electrode TI effect using two tDCS simulations with
-        integer mesh coordinates.
+def approx_TI_max_magnitude(
+        vecE_base: torch.Tensor,
+        vecE_2: torch.Tensor,
+        eps: float = 1e-16,
+        tof16: bool = True,
+        k:int = 14,
+        block_size = 10000,
+        verbose:bool = False,
+) -> torch.Tensor:
+    """
+    Computes the maximum magnitude of the Ti simulation.
+    Implementation based on the following papers:
+    - 10.1016/j.cell.2017.05.024
+    - 10.1016/j.brs.2018.09.010
 
     Args:
-        subject_dir (Path): The subject directory.
-        output_dir_1 (Path): The output directory of the first simulation.
-        output_dir_2 (Path): The output directory of the second simulation.
-        integer_size (int, optional): The size of the integer mesh coordinates.
-        plot_alignment (bool, optional): A flag indicating whether to plot the
-            alignment of the meshes. Defaults to False.
+        vecE_base (torch.Tensor): A tensor of shape (N, 3) representing the base
+            electric field vector.
+        vecE_2 (torch.Tensor): A tensor of shape (N, 3) representing the second
+            electric field vector.
+        eps (float, optional): A small value used to avoid division by zero.
+            Defaults to 1e-16.
+        tof16 (bool, optional): A flag indicating whether to return the result
+            as a tensor of dtype torch.float16. Defaults to True.
+
+    Returns:
+        torch.Tensor: A tensor of shape (N,) representing the maximum magnitude of the TI for each pair of electric field vectors.
     """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    with torch.no_grad():
+        eps = 1e-16
+        angle_mesh = torch.stack(torch.meshgrid(
+            torch.linspace(eps, 2* np.pi, k*2),
+            torch.linspace(eps, np.pi/2, k//2),
+            indexing=None
+            ), -1).view(-1, 2) # z>0, northern hemisphere
+        unit_vecs_sphere = torch.cat((
+            torch.ones_like(angle_mesh[..., 0].unsqueeze(-1)),
+            angle_mesh
+        ), dim=1)
+        xs = unit_vecs_sphere[...,0 ] * torch.sin(
+            unit_vecs_sphere[..., 1]) * torch.cos(unit_vecs_sphere[..., 2])
+        ys = unit_vecs_sphere[...,0 ] * torch.sin(
+            unit_vecs_sphere[..., 1]) * torch.sin(unit_vecs_sphere[..., 2])
+        zs = unit_vecs_sphere[...,0 ] * torch.cos(unit_vecs_sphere[..., 1])
 
-    E_f1_info = torch.load(output_dir_1 / f'vecE-size-{integer_size}.pt')
-    E_f2_info = torch.load(output_dir_2 / f'vecE-size-{integer_size}.pt')
+        unit_vecs = torch.stack((xs, ys, zs), dim=-1).to(vecE_base.device)
+        vecE_south_idx = torch.where(vecE_base[...,0]<0)
+        vecE_base[vecE_south_idx] = -vecE_base[vecE_south_idx]
 
-    elm_centers_base = E_f1_info['elm_centers_int'].float().to(device)
-    vecE_base = E_f1_info['vecE'].to(device)
-    magnE_base = E_f1_info['magnE'].to(device)
+        vecE_south_idx = torch.where(vecE_2[...,0]<0)
+        vecE_2[vecE_south_idx] = -vecE_2[vecE_south_idx]
 
-    elm_centers2 = E_f2_info['elm_centers_int'].float().to(device)
-    vecE_2 = E_f2_info['vecE'].to(device)
-    magnE_2 = E_f2_info['magnE'].to(device)
 
-    if not elm_centers_base.shape[0] < elm_centers2.shape[0]:
-        # print('swapping meshes')
-        elm_centers_base, elm_centers2 = elm_centers2, elm_centers_base
-        vecE_base, vecE_2 = vecE_2, vecE_base
-        magnE_base, magnE_2 = magnE_2, magnE_base
+    approximated_TI_amplitude = []
+    pbar = range(len(vecE_base)//block_size +1)
+    if verbose:
+        pbar = tqdm(pbar)
+    for i in pbar:
+        if vecE_base[i*block_size:(i+1)*block_size].shape[0] == 0:
+            continue
+        vecE_base_b = vecE_base[i*block_size:(i+1)*block_size]
+        vecE_2_b = vecE_2[i*block_size:(i+1)*block_size]
+        tmpv = torch.stack((
+            torch.mm(vecE_base_b, unit_vecs.T),
+            torch.mm(vecE_2_b, unit_vecs.T)
+            ), dim=-1)
+        tmp_amp = tmpv.min(dim=-1).values.max(dim=-1).values
 
-    new_indices_2, distances = align_mesh_idx(elm_centers_base, elm_centers2,
-                                              device,
-                                              block_size=20,
-                                              dist_threshold=2
-                                              )
-    if plot_alignment:
-        plt.hist(distances.data.cpu().numpy(), bins=100)
-        plt.savefig('distances-compute_BE_TI_from_tDCS_sims_int.png')
+        approximated_TI_amplitude.append(tmp_amp)
 
-    elm_centers2 = elm_centers2[new_indices_2]
+    approximated_TI_amplitude = torch.cat(approximated_TI_amplitude)*2
 
-    amplitude = compute_TI_max_magnitude(
-        vecE_base, vecE_2, magnE_base, magnE_2)
-    return amplitude
+
+    if tof16:
+        return approximated_TI_amplitude.half()
+    else:
+        return approximated_TI_amplitude
+
+
+
 
 
 def compute_BE_TI_from_tDCS_sims(subject_dir: Path,
@@ -418,7 +455,8 @@ def compute_BE_TI_from_tDCS_sims(subject_dir: Path,
     # magnE_2 = torch.from_numpy(head_mesh_2.field['magnE'][:]).to(device)[
     #     new_indices_2]
     # Now let's calculate the max magnitude across the whole model.
-    max_ti_magn = compute_TI_max_magnitude(vecE_base, vecE_2)
+    # max_ti_magn = compute_TI_max_magnitude(vecE_base, vecE_2)
+    max_ti_magn = approx_TI_max_magnitude(vecE_base, vecE_2)
     assert max_ti_magn.shape[0] == elm_centers_base.shape[0]
 
     return elm_centers_base, max_ti_magn, (vecE_base, vecE_2)
@@ -433,7 +471,8 @@ def compute_TI_focality(
     rs: Union[List[float], float],
     mesh_vols: torch.Tensor = None,
     mesh_mask: torch.Tensor = None,
-    )-> float:
+    quantile_threshold: float = 0.99,
+    )-> torch.Tensor:
     """
     Computes the focality of TI values for a given set of coordinates and radii.
     # TODO Maybe we need to take volume into account too.
@@ -461,32 +500,31 @@ def compute_TI_focality(
         must be the same'
     for idx, (coord, r) in enumerate(zip(mni_coords, rs)):
         subj_coords = simnibs.mni2subject_coords(coord, str(subject_dir))
-        # import ipdb; ipdb.set_trace() # fmt: off
         mni_coords[idx] = (subj_coords[0], subj_coords[1], subj_coords[2])
 
         assert len(coord) == 3, 'Each coordinate must have 3 values'
         assert r > 0, 'The radius must be positive'
+    with torch.no_grad():
+        mni_coords = torch.tensor(mni_coords).float().to(max_ti_magn.device)
+        rs = torch.tensor(rs).float().to(max_ti_magn.device)
 
-    mni_coords = torch.tensor(mni_coords).double().to(max_ti_magn.device)
-    rs = torch.tensor(rs).double().to(max_ti_magn.device)
+        dis2spots = torch.cdist(elm_centers.float(), mni_coords)
+        coord_cond = dis2spots < rs # of shape  (n_elms, n_spots)
+        found = coord_cond.any(dim=0).all()
+        if found.float() != 1:
+            raise ValueError('There are some spots that are \
+                not covered by any element. Found ones: {found}')
 
-    dis2spots = torch.cdist(elm_centers, mni_coords)
-    coord_cond = dis2spots < rs # of shape  (n_elms, n_spots)
-    found = coord_cond.any(dim=0).all()
-    if found.float() != 1:
-        raise ValueError('There are some spots that are \
-            not covered by any element. Found ones: {found}')
+        coord_mask = coord_cond.any(dim=1) # .float() # of shape (n_elms,)
+        noncoord_mask = torch.logical_not(coord_mask)
+        if mesh_mask is not None:
+            coord_mask = torch.logical_and(coord_mask, mesh_mask)
+        focal_coords = torch.where(coord_mask == torch.tensor(True))
 
-    coord_mask = coord_cond.any(dim=1) # .float() # of shape (n_elms,)
-    noncoord_mask = torch.logical_not(coord_mask)
-    if mesh_mask is not None:
-        coord_mask = torch.logical_and(coord_mask, mesh_mask)
-    focal_coords = torch.where(coord_mask == torch.tensor(True))
-
-    # this actually considers many other elements other than the GM and WM
-    nonfocal_coords = torch.where(
-        torch.logical_and(noncoord_mask, mesh_mask) == torch.tensor(True)
-        ) 
+        # this actually considers many other elements other than the GM and WM
+        nonfocal_coords = torch.where(
+            torch.logical_and(noncoord_mask, mesh_mask) == torch.tensor(True)
+            ) 
     focal_magn = max_ti_magn[focal_coords]
     nonfocal_magn = max_ti_magn[nonfocal_coords]
     if mesh_vols is not None:
@@ -510,7 +548,10 @@ def compute_TI_focality(
 
         # # method 3
         focal_magn = focal_magn.mean()
-        nonfocal_magn = nonfocal_magn.max()
+        # nonfocal_magn = nonfocal_magn.max()
+        nonfocal_magn = torch.quantile(nonfocal_magn, quantile_threshold)
+        # import ipdb; ipdb.set_trace() # fmt: off
+        # nonfocal_magn = nonfocal_magn.min()
 
         # # method 4
         # focal_vol = mesh_vols[focal_coords]
@@ -532,7 +573,7 @@ def compute_TI_focality(
 
     focality = focal_magn / nonfocal_magn
 
-    return focality.item()
+    return focality
 
 
 

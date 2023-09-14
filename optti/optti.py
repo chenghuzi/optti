@@ -15,6 +15,7 @@ from tqdm import tqdm, trange
 from .ti_lib import (
     compute_TI_focality,
     compute_TI_max_magnitude,
+    approx_TI_max_magnitude,
     res2mask_and_vol,
     run_tDCS_sim,
     save_msh2mni
@@ -319,7 +320,9 @@ class OptTI:
         save_TI_mesh: bool = False,
         mesh_path: str = './TI.msh',
         nii_path: str = './TI',
-        return_mesh: bool = False
+        return_mesh: bool = False,
+        scaling_ep1: float = 1.,
+        scaling_ep2: float = 1.,
     ):
         # read reference mesh
         res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
@@ -335,15 +338,18 @@ class OptTI:
         tDCS_res_1 = self.read_tDCS(ep1[0], ep1[1])
         tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
 
-        amp_TI = compute_TI_max_magnitude(
-            tDCS_res_1['vecE'].float(), tDCS_res_2['vecE'].float()
-        ).cpu().numpy()
+        amp_TI = approx_TI_max_magnitude(
+            tDCS_res_1['vecE'].float(),
+            tDCS_res_2['vecE'].float(),
+            scaling_ep1=scaling_ep1,
+            scaling_ep2=scaling_ep2,
+        )
 
         if save_TI_mesh:
             save_msh2mni(
                 self.model_dir,
                 mesh,
-                amp_TI,
+                amp_TI.cpu().numpy(),
                 mesh_path,
                 nii_path,
             )
@@ -360,6 +366,9 @@ class OptTI:
         coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
         rs: Union[List[float], float],
         just_gray_matter: bool = False,
+        scaling_ep1: float = 1.,
+        scaling_ep2: float = 1.,
+        return_num: bool = True,
     ):
         # read reference mesh
         res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
@@ -378,13 +387,15 @@ class OptTI:
 
             self._focality_cache['mesh_vols'] = mesh_vols
             self._focality_cache['mesh_mask'] = mesh_mask
+            import ipdb; ipdb.set_trace() # fmt: off
             self._focality_cache['res_ref'] = res_ref
 
         tDCS_res_1 = self.read_tDCS(ep1[0], ep1[1])
         tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
 
-        amp_TI = compute_TI_max_magnitude(
-            tDCS_res_1['vecE'].float(), tDCS_res_2['vecE'].float(),
+        amp_TI = approx_TI_max_magnitude(
+            tDCS_res_1['vecE'].float() * scaling_ep1,
+            tDCS_res_2['vecE'].float() * scaling_ep2,
             tof16=False,
         )
         focality = compute_TI_focality(
@@ -396,6 +407,8 @@ class OptTI:
             mesh_vols=self._focality_cache['mesh_vols'].clone(),
             mesh_mask=self._focality_cache['mesh_mask'].clone(),
         )
+        if return_num:
+            focality = focality.item()
         return focality
 
     def random_search(self,
