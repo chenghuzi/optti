@@ -386,26 +386,29 @@ class OptTI:
                 res_tensors, self.device, just_gray_matter)
 
             self._focality_cache['mesh_vols'] = mesh_vols
-            self._focality_cache['mesh_mask'] = mesh_mask
-            import ipdb; ipdb.set_trace() # fmt: off
+            self._focality_cache['mesh_mask_idx'] = torch.where(mesh_mask)[0]
             self._focality_cache['res_ref'] = res_ref
 
         tDCS_res_1 = self.read_tDCS(ep1[0], ep1[1])
         tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
 
         amp_TI = approx_TI_max_magnitude(
-            tDCS_res_1['vecE'].float() * scaling_ep1,
-            tDCS_res_2['vecE'].float() * scaling_ep2,
+            tDCS_res_1['vecE'][self._focality_cache['mesh_mask_idx']
+                               ].float() * scaling_ep1,
+            tDCS_res_2['vecE'][self._focality_cache['mesh_mask_idx']
+                               ].float() * scaling_ep2,
             tof16=False,
         )
         focality = compute_TI_focality(
             self.model_dir,
-            self._focality_cache['res_ref']['elm_centers'].double().clone(),
+            self._focality_cache['res_ref']['elm_centers'][
+                self._focality_cache['mesh_mask_idx']].float().clone(),
             amp_TI,
             coords,
             rs,
-            mesh_vols=self._focality_cache['mesh_vols'].clone(),
-            mesh_mask=self._focality_cache['mesh_mask'].clone(),
+            mesh_vols=self._focality_cache['mesh_vols'][
+                self._focality_cache['mesh_mask_idx']
+            ].clone(),
         )
         if return_num:
             focality = focality.item()

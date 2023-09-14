@@ -516,15 +516,12 @@ def compute_TI_focality(
                 not covered by any element. Found ones: {found}')
 
         coord_mask = coord_cond.any(dim=1) # .float() # of shape (n_elms,)
-        noncoord_mask = torch.logical_not(coord_mask)
+        # noncoord_mask = torch.logical_not(coord_mask)
         if mesh_mask is not None:
             coord_mask = torch.logical_and(coord_mask, mesh_mask)
-        focal_coords = torch.where(coord_mask == torch.tensor(True))
+        focal_coords = torch.where(coord_mask == torch.tensor(True))[0]
+        nonfocal_coords = torch.where(coord_mask == torch.tensor(False))[0]
 
-        # this actually considers many other elements other than the GM and WM
-        nonfocal_coords = torch.where(
-            torch.logical_and(noncoord_mask, mesh_mask) == torch.tensor(True)
-            ) 
     focal_magn = max_ti_magn[focal_coords]
     nonfocal_magn = max_ti_magn[nonfocal_coords]
     if mesh_vols is not None:
@@ -633,8 +630,6 @@ def res2mask_and_vol(res_tensors: Path, device: str, just_gray_matter: bool):
             head_mesh.elm.tag1 == 2
         ).to(device)
     else:
-        # mesh_mask = torch.ones(head_mesh.elm.nr).bool().to(device)
-        # import ipdb; ipdb.set_trace() # fmt: off
         mask_123 = (head_mesh.elm.tag1 == 2) | \
             (head_mesh.elm.tag1 == 1) | \
             (head_mesh.elm.tag1 == 3)
