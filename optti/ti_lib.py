@@ -321,8 +321,7 @@ def cartesian2sphere(x:torch.Tensor)->torch.Tensor:
         dim=-1)
 
 def approx_TI_max_magnitude(
-        vecE_base: torch.Tensor,
-        vecE_2: torch.Tensor,
+        vecEs: List[torch.Tensor],
         eps: float = 1e-16,
         tof16: bool = True,
         k:int = 14,
@@ -348,6 +347,7 @@ def approx_TI_max_magnitude(
     Returns:
         torch.Tensor: A tensor of shape (N,) representing the maximum magnitude of the TI for each pair of electric field vectors.
     """
+    vecE_base, vecE_2 = vecEs
     with torch.no_grad():
         eps = 1e-16
         angle_mesh = torch.stack(torch.meshgrid(
@@ -456,7 +456,7 @@ def compute_BE_TI_from_tDCS_sims(subject_dir: Path,
     #     new_indices_2]
     # Now let's calculate the max magnitude across the whole model.
     # max_ti_magn = compute_TI_max_magnitude(vecE_base, vecE_2)
-    max_ti_magn = approx_TI_max_magnitude(vecE_base, vecE_2)
+    max_ti_magn = approx_TI_max_magnitude([vecE_base, vecE_2])
     assert max_ti_magn.shape[0] == elm_centers_base.shape[0]
 
     return elm_centers_base, max_ti_magn, (vecE_base, vecE_2)

@@ -323,6 +323,7 @@ class OptTI:
         return_mesh: bool = False,
         scaling_ep1: float = 1.,
         scaling_ep2: float = 1.,
+        just_gray_matter: bool = False,
     ):
         # read reference mesh
         res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
@@ -333,23 +334,27 @@ class OptTI:
                                       self.electrode_dimensions,
                                       self.electrode_thickness)
         mesh = simnibs.read_msh(find_msh(res_dir))
-        mesh = mesh.crop_mesh(tags_needed)
 
         tDCS_res_1 = self.read_tDCS(ep1[0], ep1[1])
         tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
 
         amp_TI = approx_TI_max_magnitude(
-            tDCS_res_1['vecE'].float(),
-            tDCS_res_2['vecE'].float(),
-            scaling_ep1=scaling_ep1,
-            scaling_ep2=scaling_ep2,
+            [tDCS_res_1['vecE'].float() * scaling_ep1,
+             tDCS_res_2['vecE'].float() * scaling_ep2],
         )
+        mesh = mesh.crop_mesh(tags_needed)
+        if just_gray_matter:
+            mesh_mask = torch.from_numpy(
+                mesh.elm.tag1 == 2
+            ).to(amp_TI.device)
+            amp_TI = amp_TI[torch.where(mesh_mask)[0]]
+            mesh = mesh.crop_mesh(2)
 
         if save_TI_mesh:
             save_msh2mni(
                 self.model_dir,
                 mesh,
-                amp_TI.cpu().numpy(),
+                amp_TI.data.cpu().numpy(),
                 mesh_path,
                 nii_path,
             )
@@ -393,10 +398,10 @@ class OptTI:
         tDCS_res_2 = self.read_tDCS(ep2[0], ep2[1])
 
         amp_TI = approx_TI_max_magnitude(
-            tDCS_res_1['vecE'][self._focality_cache['mesh_mask_idx']
-                               ].float() * scaling_ep1,
-            tDCS_res_2['vecE'][self._focality_cache['mesh_mask_idx']
-                               ].float() * scaling_ep2,
+            [tDCS_res_1['vecE'][self._focality_cache['mesh_mask_idx']
+                                ].float() * scaling_ep1,
+             tDCS_res_2['vecE'][self._focality_cache['mesh_mask_idx']
+                                ].float() * scaling_ep2],
             tof16=False,
         )
         focality = compute_TI_focality(
