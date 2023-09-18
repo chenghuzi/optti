@@ -419,6 +419,66 @@ class OptTI:
             focality = focality.item()
         return focality
 
+    def get_multipolar_TI_focality(
+        self,
+        eps: List[Tuple[str, str]],
+        coords: Union[Tuple[float, float, float], List[Tuple[float, float, float]]],
+        rs: Union[List[float], float],
+        just_gray_matter: bool = False,
+        scaling_eps: List[float] = [1., 1.],
+        return_num: bool = True,
+    ):
+        assert len(eps) >= 2
+        assert len(eps) == len(scaling_eps)
+        # read reference mesh
+        res_dir = self.sim_dir_fn_gen(self.pre_calculation_dir,
+                                      self.electrode_base_pairs[0][0],
+                                      self.electrode_base_pairs[0][1],
+                                      self.current,
+                                      self.electrode_shape,
+                                      self.electrode_dimensions,
+                                      self.electrode_thickness)
+        res_tensors = res_dir / 'vecE.pt'
+        assert res_tensors.is_file()
+
+        if len(self._focality_cache) == 0:
+            res_ref, mesh_mask, mesh_vols = res2mask_and_vol(
+                res_tensors, self.device, just_gray_matter)
+
+            self._focality_cache['mesh_vols'] = mesh_vols
+            self._focality_cache['mesh_mask_idx'] = torch.where(mesh_mask)[0]
+            self._focality_cache['res_ref'] = res_ref
+
+        tDCS_ress = []
+        for ep1, ep2 in eps:
+            tDCS_ress.append(self.read_tDCS(ep1, ep2))
+
+        amp_TI = approx_TI_max_magnitude(
+            [tDCS_res['vecE'][self._focality_cache['mesh_mask_idx']
+                              ].float() * scaling_eps[t_idx]
+
+                for t_idx, tDCS_res in enumerate(tDCS_ress)],
+            # [tDCS_res_1['vecE'][self._focality_cache['mesh_mask_idx']
+            #                     ].float() * scaling_ep1,
+            #  tDCS_res_2['vecE'][self._focality_cache['mesh_mask_idx']
+            #                     ].float() * scaling_ep2],
+            tof16=False,
+        )
+        focality = compute_TI_focality(
+            self.model_dir,
+            self._focality_cache['res_ref']['elm_centers'][
+                self._focality_cache['mesh_mask_idx']].float().clone(),
+            amp_TI,
+            coords,
+            rs,
+            mesh_vols=self._focality_cache['mesh_vols'][
+                self._focality_cache['mesh_mask_idx']
+            ].clone(),
+        )
+        if return_num:
+            focality = focality.item()
+        return focality
+
     def random_search(self,
                       coords: Union[Tuple[float, float, float],
                                     List[Tuple[float, float, float]]],

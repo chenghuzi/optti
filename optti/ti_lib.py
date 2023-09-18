@@ -324,7 +324,7 @@ def approx_TI_max_magnitude(
         vecEs: List[torch.Tensor],
         eps: float = 1e-16,
         tof16: bool = True,
-        k:int = 14,
+        k:int = 20,
         block_size = 10000,
         verbose:bool = False,
 ) -> torch.Tensor:
@@ -347,7 +347,7 @@ def approx_TI_max_magnitude(
     Returns:
         torch.Tensor: A tensor of shape (N,) representing the maximum magnitude of the TI for each pair of electric field vectors.
     """
-    vecE_base, vecE_2 = vecEs
+    vecE_ref = vecEs[0]
     with torch.no_grad():
         eps = 1e-16
         angle_mesh = torch.stack(torch.meshgrid(
@@ -365,28 +365,39 @@ def approx_TI_max_magnitude(
             unit_vecs_sphere[..., 1]) * torch.sin(unit_vecs_sphere[..., 2])
         zs = unit_vecs_sphere[...,0 ] * torch.cos(unit_vecs_sphere[..., 1])
 
-        unit_vecs = torch.stack((xs, ys, zs), dim=-1).to(vecE_base.device)
-        vecE_south_idx = torch.where(vecE_base[...,0]<0)
-        vecE_base[vecE_south_idx] = -vecE_base[vecE_south_idx]
+        unit_vecs = torch.stack((xs, ys, zs), dim=-1).to(vecE_ref.device)
 
-        vecE_south_idx = torch.where(vecE_2[...,0]<0)
-        vecE_2[vecE_south_idx] = -vecE_2[vecE_south_idx]
+        for vecE in vecEs:
+            vecE_south_idx = torch.where(vecE[...,0]<0)
+            vecE[vecE_south_idx] = -vecE[vecE_south_idx]
+
 
 
     approximated_TI_amplitude = []
-    pbar = range(len(vecE_base)//block_size +1)
+    pbar = range(len(vecE_ref)//block_size +1)
     if verbose:
         pbar = tqdm(pbar)
     for i in pbar:
-        if vecE_base[i*block_size:(i+1)*block_size].shape[0] == 0:
+        if vecE_ref[i*block_size:(i+1)*block_size].shape[0] == 0:
             continue
-        vecE_base_b = vecE_base[i*block_size:(i+1)*block_size]
-        vecE_2_b = vecE_2[i*block_size:(i+1)*block_size]
-        tmpv = torch.stack((
-            torch.mm(vecE_base_b, unit_vecs.T),
-            torch.mm(vecE_2_b, unit_vecs.T)
-            ), dim=-1)
+        res = []
+        for vecE in vecEs:
+            vecE_b = vecE[i*block_size:(i+1)*block_size]
+            res.append(torch.mm(vecE_b, unit_vecs.T))
+        tmpv = torch.stack(res, dim=-1)
+        # this is the core part.
+        # TODO fix this for multi-ploar cases.
+        # for two TI pairs, we need to calculate the minimum amplitude
+        # for more, it will be very complicated.
         tmp_amp = tmpv.min(dim=-1).values.max(dim=-1).values
+
+        # vecE_base_b = vecE_base[i*block_size:(i+1)*block_size]
+        # vecE_2_b = vecE_2[i*block_size:(i+1)*block_size]
+        # tmpv = torch.stack((
+        #     torch.mm(vecE_base_b, unit_vecs.T),
+        #     torch.mm(vecE_2_b, unit_vecs.T)
+        #     ), dim=-1)
+        # tmp_amp = tmpv.min(dim=-1).values.max(dim=-1).values
 
         approximated_TI_amplitude.append(tmp_amp)
 
